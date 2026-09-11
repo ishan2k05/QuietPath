@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -23,17 +24,22 @@ class ExploreMapScreen extends ConsumerStatefulWidget {
 class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
   String _currentDestination = 'Bangalore Golf Club';
   final TransformationController _transformationController = TransformationController();
+  MapDisplayMode _mapDisplayMode = MapDisplayMode.googleMaps;
   bool _showSensoryZones = true;
-  bool _showTileLayer = true;
   String? _selectedHazardId;
   bool _isRouteSheetExpanded = false;
+  double _cameraLat = 12.9770;
+  double _cameraLng = 77.5910;
+  double _cameraZoom = 14.0;
+  double _startScaleZoom = 14.0;
+  Offset? _lastFocalPoint;
 
   @override
   void initState() {
     super.initState();
     final cfg = AppConfigService();
+    _mapDisplayMode = cfg.mapDisplayMode;
     _showSensoryZones = cfg.showSensoryCanopy;
-    _showTileLayer = cfg.showStreetTiles;
     _currentDestination = cfg.currentDestination;
   }
 
@@ -44,154 +50,503 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
   }
 
   Future<void> _recenterMap() async {
+    final userLoc = ref.read(userLocationProvider);
     setState(() {
-      _transformationController.value = Matrix4.identity();
+      _cameraLat = userLoc.latitude;
+      _cameraLng = userLoc.longitude;
+      _cameraZoom = 15.0;
     });
     await ref.read(userLocationProvider.notifier).toggleHardwareGps();
   }
 
-  void _zoomIn() {
-    final matrix = _transformationController.value.clone();
-    matrix.scale(1.25);
-    _transformationController.value = matrix;
-  }
 
-  void _zoomOut() {
-    final matrix = _transformationController.value.clone();
-    matrix.scale(0.8);
-    _transformationController.value = matrix;
-  }
 
-  void _toggleSensoryZones() {
+  void _toggleGoogleMapsMode() {
     setState(() {
-      _showSensoryZones = !_showSensoryZones;
+      if (_mapDisplayMode == MapDisplayMode.googleMaps) {
+        _mapDisplayMode = MapDisplayMode.streetTiles;
+      } else {
+        _mapDisplayMode = MapDisplayMode.googleMaps;
+      }
     });
-    AppConfigService().setShowSensoryCanopy(_showSensoryZones);
+    AppConfigService().setMapDisplayMode(_mapDisplayMode);
+
+    final label = _mapDisplayMode == MapDisplayMode.googleMaps
+        ? 'Google Maps (Sensory Vector)'
+        : 'Street Tiles (Esri World)';
+    _showMapModeSnackBar(label);
   }
+
+  void _toggleTileCanvasMode() {
+    setState(() {
+      if (_mapDisplayMode == MapDisplayMode.pureCanvas) {
+        _mapDisplayMode = MapDisplayMode.streetTiles;
+      } else {
+        _mapDisplayMode = MapDisplayMode.pureCanvas;
+      }
+    });
+    AppConfigService().setMapDisplayMode(_mapDisplayMode);
+
+    final label = _mapDisplayMode == MapDisplayMode.pureCanvas
+        ? 'Calm Vector Canvas'
+        : 'Street Tiles (Esri World)';
+    _showMapModeSnackBar(label);
+  }
+
+  void _showMapModeSnackBar(String label) {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              _mapDisplayMode == MapDisplayMode.googleMaps
+                  ? Icons.map_rounded
+                  : (_mapDisplayMode == MapDisplayMode.streetTiles
+                      ? Icons.layers_rounded
+                      : Icons.brush_rounded),
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+          ],
+        ),
+        duration: const Duration(milliseconds: 1400),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: QuietColors.textCharcoal,
+      ),
+    );
+  }
+
+
 
   void _openSearchSheet() {
+    final userLocation = ref.read(userLocationProvider);
+    final searchController = TextEditingController();
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.white,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
-        final destinations = [
+        String searchQuery = '';
+        String selectedCategory = 'All';
+
+        final allDestinations = [
+          {
+            'name': 'Central Public Library',
+            'address': 'Cubbon Park, Sampangi Rama Nagara, Bengaluru',
+            'category': 'Safe Space / Library',
+            'badge': 'Silence Required',
+            'lat': 12.9750,
+            'lng': 77.5900,
+          },
           {
             'name': 'Bangalore Golf Club',
             'address': 'Sankey Road, High Grounds, Bengaluru',
-            'category': 'Recreation / Green Space',
+            'category': 'Parks & Greenery',
             'badge': 'Low Noise',
+            'lat': 12.9860,
+            'lng': 77.5850,
           },
           {
             'name': 'Cubbon Park Sanctuary',
             'address': 'Kasturba Road, Sampangi Rama Nagara, Bengaluru',
-            'category': 'Park / Nature Sanctuary',
+            'category': 'Parks & Greenery',
             'badge': 'Very Quiet',
+            'lat': 12.9763,
+            'lng': 77.5929,
           },
           {
             'name': 'Lalbagh Botanical Garden',
-            'address': 'Mavalli, Bengaluru',
-            'category': 'Botanical Conservatory',
+            'address': 'Mavalli, Near South End, Bengaluru',
+            'category': 'Parks & Greenery',
             'badge': 'Low Stimulus',
+            'lat': 12.9507,
+            'lng': 77.5848,
           },
           {
-            'name': 'Central Public Library',
-            'address': 'Cubbon Park, Bengaluru',
-            'category': 'Safe Space / Library',
-            'badge': 'Silence Required',
+            'name': 'Ulsoor Lake Promenade',
+            'address': 'Ulsoor Road, Halasuru, Bengaluru',
+            'category': 'Water Promenades',
+            'badge': 'Water Breeze',
+            'lat': 12.9815,
+            'lng': 77.6200,
+          },
+          {
+            'name': 'National Gallery of Modern Art',
+            'address': '49 Palace Road, Vasanth Nagar, Bengaluru',
+            'category': 'Sanctuaries',
+            'badge': 'Peaceful Indoor',
+            'lat': 12.9890,
+            'lng': 77.5880,
+          },
+          {
+            'name': 'Sankey Tank Peaceful Trail',
+            'address': '11th Cross, Sadashivanagar, Bengaluru',
+            'category': 'Water Promenades',
+            'badge': 'Tree Canopy',
+            'lat': 13.0070,
+            'lng': 77.5730,
+          },
+          {
+            'name': 'IISc Botanical Garden',
+            'address': 'CV Raman Road, Mathikere, Bengaluru',
+            'category': 'Sanctuaries',
+            'badge': 'Nature Sanctuary',
+            'lat': 13.0180,
+            'lng': 77.5680,
           },
           {
             'name': 'Commercial Street',
             'address': 'Tasker Town, Shivaji Nagar, Bengaluru',
-            'category': 'Commercial Center',
-            'badge': 'High Noise',
+            'category': 'Commercial',
+            'badge': 'High Activity',
+            'lat': 12.9822,
+            'lng': 77.6083,
           },
         ];
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.withOpacity(0.3),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
+        void selectAndNavigate(String destName) {
+          final coord = LocationService.destinationCoordinates[destName];
+          setState(() {
+            _currentDestination = destName;
+            if (coord != null) {
+              final userLoc = ref.read(userLocationProvider);
+              _cameraLat = (userLoc.latitude + coord.latitude) / 2;
+              _cameraLng = (userLoc.longitude + coord.longitude) / 2;
+              _cameraZoom = 14.0;
+            }
+          });
+          AppConfigService().setCurrentDestination(destName);
+          ref.read(routesProvider.notifier).fetchRoutes();
+          TtsService().speakCalm('Destination set to $destName. Calculating calm route.');
+          Navigator.pop(ctx);
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Route calculated to $destName',
+                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
               ),
-              const SizedBox(height: 16),
-              Text(
-                'Choose Destination',
-                style: GoogleFonts.inter(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  color: QuietColors.textCharcoal,
-                ),
+              backgroundColor: QuietColors.primaryDark,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 3),
+              action: SnackBarAction(
+                label: 'Start Nav',
+                textColor: Colors.white,
+                onPressed: () {
+                  context.push(
+                    '/navigation',
+                    extra: {'destination': destName},
+                  );
+                },
               ),
-              const SizedBox(height: 12),
-              ...destinations.map((dest) {
-                final isSelected = dest['name'] == _currentDestination;
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: isSelected ? QuietColors.primaryLight : const Color(0xFFF1F3F5),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.location_on_rounded,
-                      color: isSelected ? QuietColors.primaryDark : QuietColors.textCharcoal,
-                      size: 20,
-                    ),
-                  ),
-                  title: Text(
-                    dest['name']!,
-                    style: GoogleFonts.inter(
-                      fontSize: 15,
-                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
-                      color: QuietColors.textCharcoal,
-                    ),
-                  ),
-                  subtitle: Text(
-                    dest['address']!,
-                    style: GoogleFonts.inter(fontSize: 12, color: QuietColors.textMuted),
-                  ),
-                  trailing: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF1F6F0),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      dest['badge']!,
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: QuietColors.primaryDark,
+            ),
+          );
+        }
+
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final filtered = allDestinations.where((d) {
+              final matchesQuery = searchQuery.isEmpty ||
+                  (d['name'] as String).toLowerCase().contains(searchQuery.toLowerCase()) ||
+                  (d['address'] as String).toLowerCase().contains(searchQuery.toLowerCase()) ||
+                  (d['badge'] as String).toLowerCase().contains(searchQuery.toLowerCase());
+              final matchesCat = selectedCategory == 'All' || d['category'] == selectedCategory;
+              return matchesQuery && matchesCat;
+            }).toList();
+
+            final hasCustomQuery = searchQuery.trim().isNotEmpty &&
+                !allDestinations.any((d) => (d['name'] as String).toLowerCase() == searchQuery.trim().toLowerCase());
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.78,
+              padding: EdgeInsets.only(
+                left: 20.0,
+                right: 20.0,
+                top: 16.0,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 16.0,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Drag Handle
+                  Center(
+                    child: Container(
+                      width: 44,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
-                  onTap: () {
-                    setState(() {
-                      _currentDestination = dest['name']!;
-                    });
-                    AppConfigService().setCurrentDestination(_currentDestination);
-                    ref.read(routesProvider.notifier).fetchRoutes();
-                    Navigator.pop(ctx);
-                  },
-                );
-              }),
-              const SizedBox(height: 16),
-            ],
-          ),
+                  const SizedBox(height: 14),
+
+                  // Header Row with GPS Telemetry Status
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'GPS Destination Search',
+                        style: GoogleFonts.inter(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: QuietColors.textCharcoal,
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: userLocation.isHardwareGps
+                              ? const Color(0xFFE8F5E9)
+                              : const Color(0xFFE3F2FD),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              userLocation.isHardwareGps
+                                  ? Icons.gps_fixed_rounded
+                                  : Icons.near_me_rounded,
+                              size: 12,
+                              color: userLocation.isHardwareGps
+                                  ? QuietColors.primaryDark
+                                  : const Color(0xFF1565C0),
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              userLocation.isHardwareGps ? 'Live Hardware GPS' : 'Sensory GPS',
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                color: userLocation.isHardwareGps
+                                    ? QuietColors.primaryDark
+                                    : const Color(0xFF1565C0),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Interactive GPS Search Text Field
+                  Container(
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF5F7F5),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFE2E7E2)),
+                    ),
+                    child: TextField(
+                      controller: searchController,
+                      style: GoogleFonts.inter(fontSize: 14, color: QuietColors.textCharcoal),
+                      decoration: InputDecoration(
+                        hintText: 'Search calm places, parks, safe spaces, coordinates...',
+                        hintStyle: GoogleFonts.inter(fontSize: 13, color: QuietColors.textMuted),
+                        prefixIcon: const Icon(Icons.search_rounded, color: QuietColors.primaryDark, size: 20),
+                        suffixIcon: searchQuery.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear_rounded, size: 18, color: QuietColors.textMuted),
+                                onPressed: () {
+                                  searchController.clear();
+                                  setSheetState(() => searchQuery = '');
+                                },
+                              )
+                            : null,
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      ),
+                      onChanged: (val) {
+                        setSheetState(() => searchQuery = val);
+                      },
+                      onSubmitted: (val) {
+                        if (val.trim().isNotEmpty) {
+                          selectAndNavigate(val.trim());
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Category Filter Chips
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        'All',
+                        'Parks & Greenery',
+                        'Safe Space / Library',
+                        'Sanctuaries',
+                        'Water Promenades',
+                      ].map((cat) {
+                        final isSel = selectedCategory == cat;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 6.0),
+                          child: ChoiceChip(
+                            label: Text(
+                              cat,
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                fontWeight: isSel ? FontWeight.w700 : FontWeight.w500,
+                                color: isSel ? Colors.white : QuietColors.textCharcoal,
+                              ),
+                            ),
+                            selected: isSel,
+                            selectedColor: QuietColors.primaryDark,
+                            backgroundColor: const Color(0xFFF1F3F1),
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            onSelected: (selected) {
+                              if (selected) {
+                                setSheetState(() => selectedCategory = cat);
+                              }
+                            },
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+
+                  // Results List
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        // Custom GPS Target / Coordinate entry option
+                        if (hasCustomQuery) ...[
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFFE8F5E9),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.add_location_alt_rounded, color: QuietColors.primaryDark, size: 20),
+                            ),
+                            title: Text(
+                              'Navigate to "$searchQuery"',
+                              style: GoogleFonts.inter(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: QuietColors.primaryDark,
+                              ),
+                            ),
+                            subtitle: Text(
+                              'Custom GPS destination / coordinate navigation',
+                              style: GoogleFonts.inter(fontSize: 11, color: QuietColors.textMuted),
+                            ),
+                            trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: QuietColors.primaryDark),
+                            onTap: () => selectAndNavigate(searchQuery.trim()),
+                          ),
+                          const Divider(height: 12),
+                        ],
+
+                        // Filtered Destinations
+                        ...filtered.map((dest) {
+                          final name = dest['name'] as String;
+                          final address = dest['address'] as String;
+                          final badge = dest['badge'] as String;
+                          final lat = (dest['lat'] as num).toDouble();
+                          final lng = (dest['lng'] as num).toDouble();
+                          final isSelected = name == _currentDestination;
+
+                          final distanceMeters = LocationService.calculateDistanceMeters(
+                            userLocation.latitude,
+                            userLocation.longitude,
+                            lat,
+                            lng,
+                          );
+                          final distanceStr = distanceMeters >= 1000
+                              ? '${(distanceMeters / 1000).toStringAsFixed(1)} km'
+                              : '${distanceMeters.round()} m';
+
+                          return ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            leading: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: isSelected ? QuietColors.primaryLight : const Color(0xFFF1F3F5),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                Icons.location_on_rounded,
+                                color: isSelected ? QuietColors.primaryDark : QuietColors.textCharcoal,
+                                size: 20,
+                              ),
+                            ),
+                            title: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    name,
+                                    style: GoogleFonts.inter(
+                                      fontSize: 14,
+                                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
+                                      color: QuietColors.textCharcoal,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  distanceStr,
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: QuietColors.textMuted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            subtitle: Text(
+                              address,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.inter(fontSize: 11, color: QuietColors.textMuted),
+                            ),
+                            trailing: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF1F6F0),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                badge,
+                                style: GoogleFonts.inter(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: QuietColors.primaryDark,
+                                ),
+                              ),
+                            ),
+                            onTap: () => selectAndNavigate(name),
+                          );
+                        }),
+
+                        if (filtered.isEmpty && !hasCustomQuery)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 24.0),
+                            child: Center(
+                              child: Text(
+                                'No matching calm locations found.\nType any place or coordinates to route.',
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.inter(fontSize: 13, color: QuietColors.textMuted),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
         );
       },
     );
@@ -460,10 +815,8 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
   void _openEnvironmentalSheet(EnvironmentalTelemetry telemetry) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
       builder: (ctx) {
         Color aqiBadgeColor = const Color(0xFF2E7D32);
         Color aqiBgColor = const Color(0xFFE8F5E9);
@@ -475,22 +828,30 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
           aqiBgColor = const Color(0xFFFEF3C7);
         }
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.withOpacity(0.3),
-                    borderRadius: BorderRadius.circular(2),
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.85,
+          ),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
                 ),
-              ),
               const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -656,12 +1017,124 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                 ),
                 const SizedBox(height: 16),
               ],
+
+              // Surrounding Micro-Climates (Live Multi-Sensor Readings)
+              Builder(
+                builder: (context) {
+                  final surroundings = ref.watch(surroundingsTelemetryProvider).value?.zones ??
+                      SurroundingsTelemetry.defaultSurroundings.zones;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            'Surrounding Micro-Climates (Live)',
+                            style: GoogleFonts.inter(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                              color: QuietColors.textCharcoal,
+                            ),
+                          ),
+                          Text(
+                            'Real-time Open-Meteo',
+                            style: GoogleFonts.inter(
+                              fontSize: 10,
+                              color: QuietColors.primaryDark,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      ...surroundings.map((z) {
+                        final isGreen = z.type == 'green_canopy';
+                        final isWater = z.type == 'water_promenade';
+                        final badgeColor = isGreen
+                            ? const Color(0xFF2E7D32)
+                            : (isWater ? const Color(0xFF0288D1) : const Color(0xFFD97706));
+                        final badgeBg = isGreen
+                            ? const Color(0xFFF1F8F1)
+                            : (isWater ? const Color(0xFFE1F5FE) : const Color(0xFFFFF8E1));
+
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF8FAF8),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFFE6ECE6)),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: badgeBg,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  isGreen
+                                      ? Icons.eco_rounded
+                                      : (isWater ? Icons.water_drop_rounded : Icons.traffic_rounded),
+                                  size: 16,
+                                  color: badgeColor,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      z.name,
+                                      style: GoogleFonts.inter(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                        color: QuietColors.textCharcoal,
+                                      ),
+                                    ),
+                                    Text(
+                                      z.condition,
+                                      style: GoogleFonts.inter(
+                                        fontSize: 10,
+                                        color: QuietColors.textMuted,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: badgeBg,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  'AQI ${z.aqi} • ${z.temperatureC.round()}°C',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: badgeColor,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    ],
+                  );
+                },
+              ),
             ],
           ),
-        );
-      },
-    );
-  }
+        ),
+      );
+    },
+  );
+}
 
   Widget _buildEnvironmentalMetricCard({
     required String label,
@@ -726,6 +1199,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
     final routesState = ref.watch(routesProvider);
     final hazardsState = ref.watch(hazardsProvider);
     final userLocation = ref.watch(userLocationProvider);
+    final compassHeading = ref.watch(compassHeadingProvider);
     final isCalmestSelected =
         routesState.selectedRouteId == 'route_calmest' || routesState.selectedRouteId == null;
 
@@ -734,69 +1208,146 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          // 1. Interactive Sensory Map Canvas (Pan, Pinch-to-Zoom, Recenter)
+          // 1. Dynamic Map View (Google Maps Platform / Esri Street Tiles / Pure Vector Canvas)
           Positioned.fill(
             child: LayoutBuilder(
               builder: (context, constraints) {
-                return InteractiveViewer(
-                  transformationController: _transformationController,
-                  boundaryMargin: const EdgeInsets.all(350),
-                  minScale: 0.75,
-                  maxScale: 3.5,
+                final hasTiles = _mapDisplayMode != MapDisplayMode.pureCanvas;
+                final tileProvider = _mapDisplayMode == MapDisplayMode.googleMaps
+                    ? TileProviderType.googleRoads
+                    : TileProviderType.esriStreet;
+                final surroundingsAsync = ref.watch(surroundingsTelemetryProvider);
+
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onScaleStart: (details) {
+                    _startScaleZoom = _cameraZoom;
+                    _lastFocalPoint = details.focalPoint;
+                  },
+                  onScaleUpdate: (details) {
+                    if (_lastFocalPoint == null) return;
+                    final delta = details.focalPoint - _lastFocalPoint!;
+                    _lastFocalPoint = details.focalPoint;
+
+                    // 1. Pan adjustment in Web Mercator coordinates
+                    final currentPxX = MercatorProjection.lngToPixelX(_cameraLng, _cameraZoom);
+                    final currentPxY = MercatorProjection.latToPixelY(_cameraLat, _cameraZoom);
+
+                    final newPxX = currentPxX - delta.dx;
+                    final newPxY = currentPxY - delta.dy;
+
+                    final newLng = MercatorProjection.pixelXToLng(newPxX, _cameraZoom);
+                    final newLat = MercatorProjection.pixelYToLat(newPxY, _cameraZoom);
+
+                    // 2. Pinch zoom adjustment
+                    double newZoom = _cameraZoom;
+                    if (details.scale != 1.0) {
+                      newZoom = (_startScaleZoom + math.log(details.scale) / math.ln2).clamp(3.0, 19.0);
+                    }
+
+                    setState(() {
+                      _cameraLat = newLat.clamp(-85.0, 85.0);
+                      _cameraLng = newLng.clamp(-180.0, 180.0);
+                      _cameraZoom = newZoom;
+                    });
+                  },
+                  onScaleEnd: (details) {
+                    _lastFocalPoint = null;
+                  },
+                  onTapUp: (details) {
+                    final size = Size(constraints.maxWidth, constraints.maxHeight);
+                    for (final h in hazardsState.hazards) {
+                      final hOffset = SensoryMapCanvas.getHazardOffset(
+                        h,
+                        size,
+                        hasTileLayer: hasTiles,
+                        cameraLat: _cameraLat,
+                        cameraLng: _cameraLng,
+                        zoom: _cameraZoom,
+                      );
+                      if ((details.localPosition - hOffset).distance <= 36) {
+                        setState(() {
+                          _selectedHazardId = (_selectedHazardId == h.id) ? null : h.id;
+                        });
+                        return;
+                      }
+                    }
+                    if (_selectedHazardId != null) {
+                      setState(() {
+                        _selectedHazardId = null;
+                      });
+                    }
+                  },
                   child: SizedBox(
                     width: constraints.maxWidth,
                     height: constraints.maxHeight,
                     child: Stack(
                       children: [
-                        // Real-time Slippy Street Map Layer (Esri Street / OSM)
-                        if (_showTileLayer)
+                        // Real-time Procedural Slippy Street Map Layer
+                        if (hasTiles)
                           Positioned.fill(
                             child: SensoryTileLayer(
                               width: constraints.maxWidth,
                               height: constraints.maxHeight,
-                              centerLat: userLocation.latitude,
-                              centerLng: userLocation.longitude,
-                              providerType: TileProviderType.esriStreet,
+                              centerLat: _cameraLat,
+                              centerLng: _cameraLng,
+                              zoom: _cameraZoom,
+                              providerType: tileProvider,
+                              opacity: _mapDisplayMode == MapDisplayMode.googleMaps ? 0.95 : 0.85,
                             ),
                           ),
 
-                        // Interactive Sensory Vector Canvas & Tap Detection
+                        // Interactive Sensory Vector Canvas with Geo-Anchored Routes
                         Positioned.fill(
-                          child: GestureDetector(
-                            behavior: HitTestBehavior.translucent,
-                            onTapUp: (details) {
-                              final size = Size(constraints.maxWidth, constraints.maxHeight);
-                              for (final h in hazardsState.hazards) {
-                                final hOffset = SensoryMapCanvas.getHazardOffset(h, size);
-                                if ((details.localPosition - hOffset).distance <= 36) {
-                                  setState(() {
-                                    _selectedHazardId = (_selectedHazardId == h.id) ? null : h.id;
-                                  });
-                                  return;
-                                }
-                              }
-                              if (_selectedHazardId != null) {
-                                setState(() {
-                                  _selectedHazardId = null;
-                                });
-                              }
-                            },
-                            child: SensoryMapCanvas(
-                              isCalmestSelected: isCalmestSelected,
-                              destinationName: _currentDestination,
-                              hazards: hazardsState.hazards,
-                              showSensoryZones: _showSensoryZones,
-                              selectedHazardId: _selectedHazardId,
-                              width: constraints.maxWidth,
-                              height: constraints.maxHeight,
-                              hasTileLayer: _showTileLayer,
-                              isHardwareGps: userLocation.isHardwareGps,
-                              userLat: userLocation.latitude,
-                              userLng: userLocation.longitude,
-                              accuracy: userLocation.accuracy,
-                            ),
+                          child: SensoryMapCanvas(
+                            isCalmestSelected: isCalmestSelected,
+                            destinationName: _currentDestination,
+                            hazards: hazardsState.hazards,
+                            showSensoryZones: _showSensoryZones,
+                            selectedHazardId: _selectedHazardId,
+                            width: constraints.maxWidth,
+                            height: constraints.maxHeight,
+                            hasTileLayer: hasTiles,
+                            isHardwareGps: userLocation.isHardwareGps,
+                            userLat: userLocation.latitude,
+                            userLng: userLocation.longitude,
+                            accuracy: userLocation.accuracy,
+                            heading: compassHeading,
+                            cameraLat: _cameraLat,
+                            cameraLng: _cameraLng,
+                            zoom: _cameraZoom,
+                            surroundingZones: surroundingsAsync.value?.zones,
                           ),
                         ),
+
+                        // Google Maps Attribution Badge (in Google Maps mode)
+                        if (_mapDisplayMode == MapDisplayMode.googleMaps)
+                          Positioned(
+                            left: 14,
+                            bottom: 110,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.85),
+                                borderRadius: BorderRadius.circular(4),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.08),
+                                    blurRadius: 4,
+                                  ),
+                                ],
+                              ),
+                              child: Text(
+                                'Google',
+                                style: GoogleFonts.inter(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF5F6368),
+                                  letterSpacing: -0.5,
+                                ),
+                              ),
+                            ),
+                          ),
                       ],
                     ),
                   ),
@@ -808,7 +1359,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
           // 2. Floating Map Navigation & Layer Action Controls
           Positioned(
             right: 16,
-            top: MediaQuery.of(context).padding.top + 120,
+            top: MediaQuery.of(context).padding.top + 162,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -824,35 +1375,35 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                 ),
                 const SizedBox(height: 8),
                 _buildMapActionButton(
-                  icon: Icons.add_rounded,
-                  tooltip: 'Zoom In',
-                  onTap: _zoomIn,
+                  icon: Icons.map_rounded,
+                  tooltip: _mapDisplayMode == MapDisplayMode.googleMaps
+                      ? 'Google Maps Active (Tap to switch to tiles)'
+                      : 'Switch to Google Maps',
+                  isActive: _mapDisplayMode == MapDisplayMode.googleMaps,
+                  onTap: _toggleGoogleMapsMode,
                 ),
                 const SizedBox(height: 8),
                 _buildMapActionButton(
-                  icon: Icons.remove_rounded,
-                  tooltip: 'Zoom Out',
-                  onTap: _zoomOut,
+                  icon: _mapDisplayMode == MapDisplayMode.pureCanvas
+                      ? Icons.brush_rounded
+                      : Icons.layers_rounded,
+                  tooltip: _mapDisplayMode == MapDisplayMode.pureCanvas
+                      ? 'Calm Canvas Active (Tap for Street Tiles)'
+                      : 'Street Tiles Active (Tap for Canvas)',
+                  isActive: _mapDisplayMode == MapDisplayMode.streetTiles,
+                  onTap: _toggleTileCanvasMode,
                 ),
-                const SizedBox(height: 8),
-                _buildMapActionButton(
-                  icon: Icons.layers_outlined,
-                  tooltip: 'Toggle Real-Time Street Map',
-                  isActive: _showTileLayer,
-                  onTap: () {
-                    setState(() {
-                      _showTileLayer = !_showTileLayer;
-                    });
-                    AppConfigService().setShowStreetTiles(_showTileLayer);
-                  },
-                ),
-                const SizedBox(height: 8),
-                _buildMapActionButton(
-                  icon: Icons.park_outlined,
-                  tooltip: 'Toggle Sensory Canopy Shading',
-                  isActive: _showSensoryZones,
-                  onTap: _toggleSensoryZones,
-                ),
+                if (compassHeading != null) ...[
+                  const SizedBox(height: 8),
+                  _buildMapActionButton(
+                    icon: Icons.navigation_rounded,
+                    tooltip: 'Compass: ${compassHeading.round()}° (Tap to calibrate)',
+                    iconRotation: compassHeading * (math.pi / 180.0),
+                    onTap: () {
+                      ref.read(compassHeadingProvider.notifier).setHeading(0.0);
+                    },
+                  ),
+                ],
               ],
             ),
           ),
@@ -901,7 +1452,10 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                           letterSpacing: 0.5,
                         ),
                       ),
-                      const Icon(Icons.emergency_share_outlined, color: QuietColors.textCharcoal, size: 20),
+                      GestureDetector(
+                        onTap: _openReportHazardSheet,
+                        child: const Icon(Icons.emergency_share_outlined, color: QuietColors.textCharcoal, size: 20),
+                      ),
                     ],
                   ),
                 ),
@@ -953,155 +1507,90 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                   ),
                 ),
 
-                // Minimalist Live Alerts Capsule & Live Environmental Telemetry
+                // Live Environmental Telemetry Capsule (AQI & Temperature only)
                 Padding(
                   padding: const EdgeInsets.only(top: 8.0),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (hazardsState.hazards.isNotEmpty)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.95),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.05),
-                                  blurRadius: 6,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: const BoxDecoration(
-                                    color: Color(0xFFD97706),
-                                    shape: BoxShape.circle,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Builder(
+                        builder: (context) {
+                          final envAsync = ref.watch(environmentalTelemetryProvider);
+                          final env = envAsync.value ?? EnvironmentalTelemetry.defaultTelemetry;
+                          Color aqiIconColor = const Color(0xFF2E7D32);
+                          if (env.aqiIndex > 100) {
+                            aqiIconColor = const Color(0xFFD32F2F);
+                          } else if (env.aqiIndex > 50) {
+                            aqiIconColor = const Color(0xFFD97706);
+                          }
+
+                          return GestureDetector(
+                            onTap: () => _openEnvironmentalSheet(env),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.95),
+                                borderRadius: BorderRadius.circular(20),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.05),
+                                    blurRadius: 6,
+                                    offset: const Offset(0, 2),
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  '${hazardsState.hazards.length} Live Alerts',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: QuietColors.textCharcoal,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                GestureDetector(
-                                  onTap: _openReportHazardSheet,
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(
-                                      color: QuietColors.primaryLight,
-                                      borderRadius: BorderRadius.circular(10),
-                                    ),
-                                    child: Text(
-                                      '+ Report',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w700,
-                                        color: QuietColors.primaryDark,
-                                      ),
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.air_rounded, size: 14, color: aqiIconColor),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'AQI ${env.aqiIndex} • ${env.temperatureC.round()}°C',
+                                    style: GoogleFonts.inter(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: QuietColors.textCharcoal,
                                     ),
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(width: 5),
+                                  const Icon(
+                                    Icons.info_outline_rounded,
+                                    size: 13,
+                                    color: QuietColors.textMuted,
+                                  ),
+                                ],
+                              ),
                             ),
+                          );
+                        },
+                      ),
+                      if (userLocation.isHardwareGps) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE3F2FD).withValues(alpha: 0.95),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFF90CAF9)),
                           ),
-
-                        if (hazardsState.hazards.isNotEmpty)
-                          const SizedBox(width: 8),
-
-                        // Live Environmental Telemetry Capsule
-                        Builder(
-                          builder: (context) {
-                            final envAsync = ref.watch(environmentalTelemetryProvider);
-                            final env = envAsync.value ?? EnvironmentalTelemetry.defaultTelemetry;
-                            Color aqiIconColor = const Color(0xFF2E7D32);
-                            if (env.aqiIndex > 100) {
-                              aqiIconColor = const Color(0xFFD32F2F);
-                            } else if (env.aqiIndex > 50) {
-                              aqiIconColor = const Color(0xFFD97706);
-                            }
-
-                            return GestureDetector(
-                              onTap: () => _openEnvironmentalSheet(env),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.95),
-                                  borderRadius: BorderRadius.circular(20),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.05),
-                                      blurRadius: 6,
-                                      offset: const Offset(0, 2),
-                                    ),
-                                  ],
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(Icons.air_rounded, size: 14, color: aqiIconColor),
-                                    const SizedBox(width: 5),
-                                    Text(
-                                      'AQI ${env.aqiIndex} (${env.aqiCategory}) • ${env.temperatureC.round()}°C',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        color: QuietColors.textCharcoal,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 5),
-                                    const Icon(
-                                      Icons.info_outline_rounded,
-                                      size: 13,
-                                      color: QuietColors.textMuted,
-                                    ),
-                                  ],
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.satellite_alt_rounded, size: 12, color: Color(0xFF1565C0)),
+                              const SizedBox(width: 4),
+                              Text(
+                                'Live GPS',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                  color: const Color(0xFF1565C0),
                                 ),
                               ),
-                            );
-                          },
-                        ),
-
-                        if (userLocation.isHardwareGps) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFE3F2FD).withValues(alpha: 0.95),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: const Color(0xFF90CAF9)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.satellite_alt_rounded, size: 12, color: Color(0xFF1565C0)),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Live GPS',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: const Color(0xFF1565C0),
-                                  ),
-                                ),
-                              ],
-                            ),
+                            ],
                           ),
-                        ],
+                        ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
 
@@ -1217,51 +1706,61 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: isCalmestSelected
-                                    ? QuietColors.primaryLight
-                                    : const Color(0xFFFDE8E4),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: Text(
-                                isCalmestSelected ? 'Score 87' : 'Score 42',
-                                style: GoogleFonts.inter(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
+                        Expanded(
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: isCalmestSelected
+                                      ? QuietColors.primaryLight
+                                      : const Color(0xFFF1F3F5),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  Icons.near_me_rounded,
+                                  size: 18,
                                   color: isCalmestSelected
                                       ? QuietColors.primaryDark
-                                      : QuietColors.alertRed,
+                                      : QuietColors.textCharcoal,
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 10),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  isCalmestSelected ? 'Calmest Route' : 'Quickest Route',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w700,
-                                    color: QuietColors.textCharcoal,
-                                  ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      _currentDestination,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.inter(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700,
+                                        color: QuietColors.textCharcoal,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      isCalmestSelected
+                                          ? 'Calmest Route • 16m (2.4 km)'
+                                          : 'Quickest Route • 12m (2.1 km)',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.inter(
+                                        fontSize: 12,
+                                        color: QuietColors.textMuted,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                Text(
-                                  isCalmestSelected ? '16 mins • 2.4 km • Shaded' : '12 mins • 2.1 km • Arterial',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 12,
-                                    color: QuietColors.textMuted,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
+                              ),
+                            ],
+                          ),
                         ),
+                        const SizedBox(width: 8),
                         InkWell(
                           onTap: () => setState(() => _isRouteSheetExpanded = true),
                           borderRadius: BorderRadius.circular(12),
@@ -1455,6 +1954,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
     required String tooltip,
     required VoidCallback onTap,
     bool isActive = false,
+    double? iconRotation,
   }) {
     return Tooltip(
       message: tooltip,
@@ -1474,11 +1974,20 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
               ),
             ],
           ),
-          child: Icon(
-            icon,
-            size: 20,
-            color: isActive ? Colors.white : QuietColors.textCharcoal,
-          ),
+          child: iconRotation != null
+              ? Transform.rotate(
+                  angle: iconRotation,
+                  child: Icon(
+                    icon,
+                    size: 20,
+                    color: isActive ? Colors.white : QuietColors.textCharcoal,
+                  ),
+                )
+              : Icon(
+                  icon,
+                  size: 20,
+                  color: isActive ? Colors.white : QuietColors.textCharcoal,
+                ),
         ),
       ),
     );

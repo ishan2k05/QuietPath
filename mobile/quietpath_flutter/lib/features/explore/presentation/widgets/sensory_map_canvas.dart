@@ -1,6 +1,11 @@
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:quietpath_flutter/core/services/location_service.dart';
 import 'package:quietpath_flutter/core/theme/quietpath_theme.dart';
+import 'package:quietpath_flutter/features/explore/data/environmental_provider.dart';
 import 'package:quietpath_flutter/features/explore/data/hazards_provider.dart';
+import 'package:quietpath_flutter/features/explore/presentation/widgets/sensory_tile_layer.dart';
 
 class SensoryMapCanvas extends StatelessWidget {
   final bool isCalmestSelected;
@@ -16,6 +21,11 @@ class SensoryMapCanvas extends StatelessWidget {
   final double? userLat;
   final double? userLng;
   final double? accuracy;
+  final double? heading;
+  final double cameraLat;
+  final double cameraLng;
+  final double zoom;
+  final List<SurroundingZone>? surroundingZones;
 
   const SensoryMapCanvas({
     super.key,
@@ -32,9 +42,31 @@ class SensoryMapCanvas extends StatelessWidget {
     this.userLat,
     this.userLng,
     this.accuracy,
+    this.heading,
+    this.cameraLat = 12.9770,
+    this.cameraLng = 77.5910,
+    this.zoom = 14.0,
+    this.surroundingZones,
   });
 
-  static Offset getHazardOffset(HazardData hazard, Size size) {
+  static Offset getHazardOffset(
+    HazardData hazard,
+    Size size, {
+    bool hasTileLayer = false,
+    double cameraLat = 12.9770,
+    double cameraLng = 77.5910,
+    double zoom = 14.0,
+  }) {
+    if (hasTileLayer) {
+      return MercatorProjection.latLngToScreen(
+        lat: hazard.lat,
+        lng: hazard.lng,
+        centerLat: cameraLat,
+        centerLng: cameraLng,
+        zoom: zoom,
+        screenSize: size,
+      );
+    }
     return getCoordinateOffset(hazard.lat, hazard.lng, size);
   }
 
@@ -44,8 +76,8 @@ class SensoryMapCanvas extends StatelessWidget {
     const minLng = 77.5830;
     const maxLng = 77.5990;
 
-    final normX = ((lng - minLng) / (maxLng - minLng)).clamp(0.12, 0.88);
-    final normY = (1.0 - ((lat - minLat) / (maxLat - minLat))).clamp(0.15, 0.85);
+    final normX = ((lng - minLng) / (maxLng - minLng)).clamp(0.05, 0.95);
+    final normY = (1.0 - ((lat - minLat) / (maxLat - minLat))).clamp(0.05, 0.95);
     return Offset(size.width * normX, size.height * normY);
   }
 
@@ -65,6 +97,11 @@ class SensoryMapCanvas extends StatelessWidget {
         userLat: userLat,
         userLng: userLng,
         accuracy: accuracy,
+        heading: heading,
+        cameraLat: cameraLat,
+        cameraLng: cameraLng,
+        zoom: zoom,
+        surroundingZones: surroundingZones,
       ),
     );
   }
@@ -82,6 +119,11 @@ class _BangaloreMapPainter extends CustomPainter {
   final double? userLat;
   final double? userLng;
   final double? accuracy;
+  final double? heading;
+  final double cameraLat;
+  final double cameraLng;
+  final double zoom;
+  final List<SurroundingZone>? surroundingZones;
 
   _BangaloreMapPainter({
     required this.isCalmestSelected,
@@ -95,22 +137,32 @@ class _BangaloreMapPainter extends CustomPainter {
     this.userLat,
     this.userLng,
     this.accuracy,
+    this.heading,
+    required this.cameraLat,
+    required this.cameraLng,
+    required this.zoom,
+    this.surroundingZones,
   });
 
-  Offset _getDestinationOffset(Size size) {
-    switch (destinationName) {
-      case 'Cubbon Park Sanctuary':
-        return Offset(size.width * 0.46, size.height * 0.38);
-      case 'Lalbagh Botanical Garden':
-        return Offset(size.width * 0.68, size.height * 0.68);
-      case 'Central Public Library':
-        return Offset(size.width * 0.38, size.height * 0.44);
-      case 'Commercial Street':
-        return Offset(size.width * 0.82, size.height * 0.42);
-      case 'Bangalore Golf Club':
-      default:
-        return Offset(size.width * 0.75, size.height * 0.28);
+  Offset _toScreen(double lat, double lng, Size size) {
+    if (hasTileLayer) {
+      return MercatorProjection.latLngToScreen(
+        lat: lat,
+        lng: lng,
+        centerLat: cameraLat,
+        centerLng: cameraLng,
+        zoom: zoom,
+        screenSize: size,
+      );
+    } else {
+      return SensoryMapCanvas.getCoordinateOffset(lat, lng, size);
     }
+  }
+
+  Offset _getDestinationOffset(Size size) {
+    final destCoord = LocationService.destinationCoordinates[destinationName] ??
+        const UserCoordinates(latitude: 12.9860, longitude: 77.5850, label: 'Destination');
+    return _toScreen(destCoord.latitude, destCoord.longitude, size);
   }
 
   @override
@@ -121,11 +173,10 @@ class _BangaloreMapPainter extends CustomPainter {
       canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), bgPaint);
     }
 
-    // 2. Sensory Zones (Park Canopy & Commercial Shading - conditional on showSensoryZones)
-    if (showSensoryZones) {
-      final parkAlpha = hasTileLayer ? 0.42 : 0.85;
+    // 2. Sensory Zones (drawn only in pure vector canvas mode; real map tiles already render native green spaces and roads)
+    if (showSensoryZones && !hasTileLayer) {
       final parkPaint = Paint()
-        ..color = const Color(0xFFD6E8D5).withValues(alpha: parkAlpha)
+        ..color = const Color(0xFFD6E8D5).withValues(alpha: 0.85)
         ..style = PaintingStyle.fill;
       final parkPath = Path()
         ..moveTo(size.width * 0.1, size.height * 0.22)
@@ -136,14 +187,13 @@ class _BangaloreMapPainter extends CustomPainter {
       canvas.drawPath(parkPath, parkPaint);
 
       final parkBorder = Paint()
-        ..color = const Color(0xFFBDD9BB).withValues(alpha: hasTileLayer ? 0.45 : 0.6)
+        ..color = const Color(0xFFBDD9BB).withValues(alpha: 0.6)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5;
       canvas.drawPath(parkPath, parkBorder);
 
       // Urban commercial stimulus buffer
-      final urbanAlpha = hasTileLayer ? 0.28 : 0.40;
-      final urbanPaint = Paint()..color = const Color(0xFFE5DECE).withValues(alpha: urbanAlpha);
+      final urbanPaint = Paint()..color = const Color(0xFFE5DECE).withValues(alpha: 0.40);
       final urbanRect = RRect.fromRectAndRadius(
         Rect.fromLTWH(size.width * 0.55, size.height * 0.42, size.width * 0.4, size.height * 0.24),
         const Radius.circular(16),
@@ -175,13 +225,13 @@ class _BangaloreMapPainter extends CustomPainter {
       canvas.drawPath(roadPath2, roadPaint);
     }
 
-    // Dynamic Start & Destination Points
-    final startOffset = Offset(size.width * 0.28, size.height * 0.72);
+    // Dynamic Start & Destination Points in Geo-Space
+    const startLat = 12.9716;
+    const startLng = 77.5946;
+    final startOffset = _toScreen(startLat, startLng, size);
     final destOffset = _getDestinationOffset(size);
 
-    // Midpoints for bezier routing
-    final midX = (startOffset.dx + destOffset.dx) / 2;
-    final midY = (startOffset.dy + destOffset.dy) / 2;
+    final waypoints = LocationService.getWaypointsForDestination(destinationName);
 
     // 4. Draw Route 2 (Quickest Route - via commercial corridor)
     final fastRoutePaint = Paint()
@@ -192,47 +242,78 @@ class _BangaloreMapPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
+    final destCoord = LocationService.destinationCoordinates[destinationName] ??
+        const UserCoordinates(latitude: 12.9860, longitude: 77.5850, label: 'Destination');
+    final midFast = _toScreen(
+      (startLat + destCoord.latitude) / 2 + 0.003,
+      (startLng + destCoord.longitude) / 2 + 0.005,
+      size,
+    );
+
     final fastPath = Path()
       ..moveTo(startOffset.dx, startOffset.dy)
       ..quadraticBezierTo(
-        midX + size.width * 0.12,
-        midY + size.height * 0.05,
+        midFast.dx,
+        midFast.dy,
         destOffset.dx,
         destOffset.dy,
       );
     canvas.drawPath(fastPath, fastRoutePaint);
 
-    // 5. Draw Route 1 (Calmest Route - through peaceful park canopy)
+    // 5. Draw Route 1 (Calmest Route - geo-anchored along peaceful park & shaded corridors)
     final calmRoutePaint = Paint()
       ..color = isCalmestSelected ? QuietColors.primaryDark : QuietColors.primary.withValues(alpha: 0.4)
       ..strokeWidth = isCalmestSelected ? 7 : 4
       ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
 
-    final calmPath = Path()
-      ..moveTo(startOffset.dx, startOffset.dy)
-      ..quadraticBezierTo(
-        midX - size.width * 0.14,
-        midY - size.height * 0.08,
-        destOffset.dx,
-        destOffset.dy,
-      );
+    final calmPath = Path()..moveTo(startOffset.dx, startOffset.dy);
+    for (int i = 1; i < waypoints.length; i++) {
+      final wpOffset = _toScreen(waypoints[i].latitude, waypoints[i].longitude, size);
+      calmPath.lineTo(wpOffset.dx, wpOffset.dy);
+    }
+    // Connect final waypoint to destination if not identical
+    calmPath.lineTo(destOffset.dx, destOffset.dy);
     canvas.drawPath(calmPath, calmRoutePaint);
 
-    // 6. User Location (Live Hardware GPS satellite beacon or Simulated waypoint pin)
+    // 6. User Location (Live Hardware GPS or Simulated walking position)
     final Offset userPos;
-    if (isHardwareGps && userLat != null && userLng != null) {
-      userPos = SensoryMapCanvas.getCoordinateOffset(userLat!, userLng!, size);
-    } else if (userStepIndex != null) {
-      final t = (userStepIndex! / 3.0).clamp(0.0, 1.0);
-      final control = isCalmestSelected
-          ? Offset(midX - size.width * 0.14, midY - size.height * 0.08)
-          : Offset(midX + size.width * 0.12, midY + size.height * 0.05);
-      final px = (1 - t) * (1 - t) * startOffset.dx + 2 * (1 - t) * t * control.dx + t * t * destOffset.dx;
-      final py = (1 - t) * (1 - t) * startOffset.dy + 2 * (1 - t) * t * control.dy + t * t * destOffset.dy;
-      userPos = Offset(px, py);
+    if (userLat != null && userLng != null) {
+      userPos = _toScreen(userLat!, userLng!, size);
+    } else if (userStepIndex != null && waypoints.isNotEmpty) {
+      final idx = userStepIndex!.clamp(0, waypoints.length - 1);
+      userPos = _toScreen(waypoints[idx].latitude, waypoints[idx].longitude, size);
     } else {
       userPos = startOffset;
+    }
+
+    // Directional Compass Heading Beam
+    if (heading != null) {
+      final rad = (heading! - 90) * (math.pi / 180.0);
+      const beamAngle = 36 * (math.pi / 180.0);
+      const beamRadius = 32.0;
+      final beamPath = Path()
+        ..moveTo(userPos.dx, userPos.dy)
+        ..arcTo(
+          Rect.fromCircle(center: userPos, radius: beamRadius),
+          rad - beamAngle / 2,
+          beamAngle,
+          false,
+        )
+        ..close();
+
+      final beamColor = isHardwareGps ? const Color(0xFF1976D2) : QuietColors.primaryDark;
+      final beamPaint = Paint()
+        ..shader = ui.Gradient.radial(
+          userPos,
+          beamRadius,
+          [
+            beamColor.withValues(alpha: 0.38),
+            beamColor.withValues(alpha: 0.0),
+          ],
+        );
+      canvas.drawPath(beamPath, beamPaint);
     }
 
     if (isHardwareGps) {
@@ -273,14 +354,70 @@ class _BangaloreMapPainter extends CustomPainter {
     canvas.drawCircle(destOffset, 7, destPaint);
     canvas.drawCircle(destOffset, 3, Paint()..color = Colors.white);
 
-    // 8. Sensory Hazard Markers (Clean aesthetic pins)
+    // 8. Surrounding Micro-Climate Telemetry Badges (Parks, Water, Corridors)
+    if (surroundingZones != null && hasTileLayer) {
+      for (final zone in surroundingZones!) {
+        final zOffset = _toScreen(zone.lat, zone.lng, size);
+        if (zOffset.dx >= -60 && zOffset.dx <= size.width + 60 &&
+            zOffset.dy >= -30 && zOffset.dy <= size.height + 30) {
+          _drawSurroundingBadge(canvas, zOffset, zone);
+        }
+      }
+    }
+
+    // 9. Sensory Hazard Markers (Clean aesthetic pins)
     for (final hazard in hazards) {
       _drawHazardMarker(canvas, size, hazard);
     }
   }
 
+  void _drawSurroundingBadge(Canvas canvas, Offset offset, SurroundingZone zone) {
+    final bool isGreen = zone.type == 'green_canopy';
+    final bool isWater = zone.type == 'water_promenade';
+    final Color badgeColor = isGreen
+        ? const Color(0xFF2E7D32)
+        : (isWater ? const Color(0xFF0288D1) : const Color(0xFFD97706));
+    final Color badgeBg = isGreen
+        ? const Color(0xFFF1F8F1)
+        : (isWater ? const Color(0xFFE1F5FE) : const Color(0xFFFFF8E1));
+
+    final text = '🍃 ${zone.name.split(" ").first}: AQI ${zone.aqi} • ${zone.temperatureC.round()}°C';
+    final span = TextSpan(
+      text: text,
+      style: TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+        color: badgeColor,
+      ),
+    );
+    final tp = TextPainter(text: span, textDirection: TextDirection.ltr)..layout();
+
+    final rect = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: offset, width: tp.width + 16, height: 22),
+      const Radius.circular(11),
+    );
+
+    // Shadow
+    canvas.drawRRect(
+      rect.shift(const Offset(0, 2)),
+      Paint()..color = Colors.black.withValues(alpha: 0.08),
+    );
+    // Background
+    canvas.drawRRect(rect, Paint()..color = badgeBg);
+    // Border
+    canvas.drawRRect(
+      rect,
+      Paint()
+        ..color = badgeColor.withValues(alpha: 0.4)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0,
+    );
+
+    tp.paint(canvas, Offset(offset.dx - tp.width / 2, offset.dy - tp.height / 2));
+  }
+
   void _drawHazardMarker(Canvas canvas, Size size, HazardData hazard) {
-    final offset = SensoryMapCanvas.getHazardOffset(hazard, size);
+    final offset = _toScreen(hazard.lat, hazard.lng, size);
     final color = hazard.tagColor;
     final isSelected = hazard.id == selectedHazardId;
 
@@ -373,7 +510,11 @@ class _BangaloreMapPainter extends CustomPainter {
         oldDelegate.userLat != userLat ||
         oldDelegate.userLng != userLng ||
         oldDelegate.accuracy != accuracy ||
-        oldDelegate.hasTileLayer != hasTileLayer;
+        oldDelegate.hasTileLayer != hasTileLayer ||
+        oldDelegate.cameraLat != cameraLat ||
+        oldDelegate.cameraLng != cameraLng ||
+        oldDelegate.zoom != zoom ||
+        oldDelegate.surroundingZones != surroundingZones;
   }
 }
 

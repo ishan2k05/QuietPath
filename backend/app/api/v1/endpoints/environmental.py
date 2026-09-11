@@ -23,3 +23,20 @@ async def get_live_environmental_telemetry(
         waqi_api_key=x_waqi_key,
     )
     return telemetry
+
+
+@router.get("/surroundings")
+async def get_live_surroundings_telemetry(
+    lat: float = Query(12.9716, description="Latitude of location"),
+    lng: float = Query(77.5946, description="Longitude of location"),
+    x_waqi_key: Optional[str] = Header(None, alias="X-WAQI-Key", description="Optional WAQI API Key"),
+):
+    """
+    Returns real-time environmental sensory telemetry for current location
+    along with surrounding micro-climates (green canopies, water breezes, urban corridors).
+    """
+    return await EnvironmentalService.get_surroundings_telemetry(
+        lat=lat,
+        lng=lng,
+        waqi_api_key=x_waqi_key,
+    )

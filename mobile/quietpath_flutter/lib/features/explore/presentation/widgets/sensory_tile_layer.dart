@@ -2,10 +2,75 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 enum TileProviderType {
+  googleRoads,
+  googleTerrain,
   esriStreet,
   esriCanvas,
   openStreetMap,
   cartoPositron,
+}
+
+class MercatorProjection {
+  static const double tileSize = 256.0;
+
+  static double lngToPixelX(double lng, double zoom) {
+    final n = math.pow(2.0, zoom).toDouble();
+    return (lng + 180.0) / 360.0 * tileSize * n;
+  }
+
+  static double latToPixelY(double lat, double zoom) {
+    final n = math.pow(2.0, zoom).toDouble();
+    final latRad = lat.clamp(-85.0511, 85.0511) * math.pi / 180.0;
+    return (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0 * tileSize * n;
+  }
+
+  static double pixelXToLng(double pixelX, double zoom) {
+    final n = math.pow(2.0, zoom).toDouble();
+    return (pixelX / (tileSize * n)) * 360.0 - 180.0;
+  }
+
+  static double pixelYToLat(double pixelY, double zoom) {
+    final n = math.pow(2.0, zoom).toDouble();
+    final yNorm = 1.0 - 2.0 * (pixelY / (tileSize * n));
+    final latRad = 2.0 * math.atan(math.exp(yNorm * math.pi)) - math.pi / 2.0;
+    return latRad * 180.0 / math.pi;
+  }
+
+  static Offset latLngToScreen({
+    required double lat,
+    required double lng,
+    required double centerLat,
+    required double centerLng,
+    required double zoom,
+    required Size screenSize,
+  }) {
+    final targetX = lngToPixelX(lng, zoom);
+    final targetY = latToPixelY(lat, zoom);
+    final centerX = lngToPixelX(centerLng, zoom);
+    final centerY = latToPixelY(centerLat, zoom);
+
+    final screenX = (targetX - centerX) + (screenSize.width / 2.0);
+    final screenY = (targetY - centerY) + (screenSize.height / 2.0);
+    return Offset(screenX, screenY);
+  }
+
+  static ({double lat, double lng}) screenToLatLng({
+    required Offset screenPos,
+    required double centerLat,
+    required double centerLng,
+    required double zoom,
+    required Size screenSize,
+  }) {
+    final centerX = lngToPixelX(centerLng, zoom);
+    final centerY = latToPixelY(centerLat, zoom);
+
+    final targetPixelX = centerX + (screenPos.dx - screenSize.width / 2.0);
+    final targetPixelY = centerY + (screenPos.dy - screenSize.height / 2.0);
+
+    final lng = pixelXToLng(targetPixelX, zoom);
+    final lat = pixelYToLat(targetPixelY, zoom);
+    return (lat: lat, lng: lng);
+  }
 }
 
 class SensoryTileLayer extends StatelessWidget {
@@ -13,7 +78,7 @@ class SensoryTileLayer extends StatelessWidget {
   final double height;
   final double centerLat;
   final double centerLng;
-  final int zoom;
+  final double zoom;
   final TileProviderType providerType;
   final double opacity;
   final bool isVisible;
@@ -24,19 +89,23 @@ class SensoryTileLayer extends StatelessWidget {
     required this.height,
     this.centerLat = 12.9770,
     this.centerLng = 77.5910,
-    this.zoom = 14,
-    this.providerType = TileProviderType.esriStreet,
-    this.opacity = 0.82,
+    this.zoom = 14.0,
+    this.providerType = TileProviderType.googleRoads,
+    this.opacity = 0.95,
     this.isVisible = true,
   });
 
-  String _getTileUrl(int z, int x, int y) {
-    switch (providerType) {
+  static String getTileUrl(TileProviderType provider, int z, int x, int y) {
+    switch (provider) {
+      case TileProviderType.googleRoads:
+        final s = (x + y).abs() % 4;
+        return 'https://mt$s.google.com/vt/lyrs=m&x=$x&y=$y&z=$z&hl=en';
+      case TileProviderType.googleTerrain:
+        final s = (x + y).abs() % 4;
+        return 'https://mt$s.google.com/vt/lyrs=p&x=$x&y=$y&z=$z&hl=en';
       case TileProviderType.esriStreet:
-        // High-resolution real-time street cartography with roads, parks, and landmarks
         return 'https://services.arcgisonline.com/arcgis/rest/services/World_Street_Map/MapServer/tile/$z/$y/$x';
       case TileProviderType.esriCanvas:
-        // Muted monochrome gray canvas
         return 'https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/$z/$y/$x';
       case TileProviderType.openStreetMap:
         return 'https://tile.openstreetmap.org/$z/$x/$y.png';
@@ -53,84 +122,62 @@ class SensoryTileLayer extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    final n = math.pow(2.0, zoom).toDouble();
-    final centerTileX = n * ((centerLng + 180.0) / 360.0);
-    final latRad = centerLat * math.pi / 180.0;
-    final centerTileY = n * (1.0 - (math.log(math.tan(latRad) + 1.0 / math.cos(latRad)) / math.pi)) / 2.0;
+    final clampedZoom = zoom.clamp(3.0, 19.0);
+    final baseZoom = clampedZoom.floor();
+    final scale = math.pow(2.0, clampedZoom - baseZoom).toDouble();
 
-    const tileSize = 256.0;
-    final tilesNeededX = (width / tileSize).ceil() + 2;
-    final tilesNeededY = (height / tileSize).ceil() + 2;
+    // Center in baseZoom pixel coordinates
+    final centerPixelX = MercatorProjection.lngToPixelX(centerLng, baseZoom.toDouble());
+    final centerPixelY = MercatorProjection.latToPixelY(centerLat, baseZoom.toDouble());
 
-    final baseTileX = centerTileX.floor();
-    final baseTileY = centerTileY.floor();
+    // Viewport dimensions in baseZoom pixel coordinates
+    final viewWidthAtBase = width / scale;
+    final viewHeightAtBase = height / scale;
 
-    final offsetX = (centerTileX - baseTileX) * tileSize;
-    final offsetY = (centerTileY - baseTileY) * tileSize;
+    final viewMinX = centerPixelX - viewWidthAtBase / 2.0;
+    final viewMaxX = centerPixelX + viewWidthAtBase / 2.0;
+    final viewMinY = centerPixelY - viewHeightAtBase / 2.0;
+    final viewMaxY = centerPixelY + viewHeightAtBase / 2.0;
 
-    final centerX = width / 2.0;
-    final centerY = height / 2.0;
+    const tileSize = MercatorProjection.tileSize;
+    // Buffer by 1 tile in every direction for crisp smooth loading without HTTP flood
+    final minTileX = (viewMinX / tileSize).floor() - 1;
+    final maxTileX = (viewMaxX / tileSize).floor() + 1;
+    final minTileY = (viewMinY / tileSize).floor() - 1;
+    final maxTileY = (viewMaxY / tileSize).floor() + 1;
 
-    final startCol = -(tilesNeededX ~/ 2);
-    final endCol = tilesNeededX ~/ 2 + 1;
-    final startRow = -(tilesNeededY ~/ 2);
-    final endRow = tilesNeededY ~/ 2 + 1;
-
-    final maxTileIndex = math.pow(2, zoom).toInt();
+    final maxTileIndex = math.pow(2, baseZoom).toInt();
 
     final List<Widget> tileWidgets = [];
 
-    for (int col = startCol; col <= endCol; col++) {
-      for (int row = startRow; row <= endRow; row++) {
-        final tileX = (baseTileX + col) % maxTileIndex;
-        final tileY = (baseTileY + row);
+    for (int ty = minTileY; ty <= maxTileY; ty++) {
+      if (ty < 0 || ty >= maxTileIndex) continue; // North and South poles boundary
 
-        if (tileY < 0 || tileY >= maxTileIndex) continue;
+      for (int tx = minTileX; tx <= maxTileX; tx++) {
+        final wrappedTileX = ((tx % maxTileIndex) + maxTileIndex) % maxTileIndex;
 
-        final left = centerX + (col * tileSize) - offsetX;
-        final top = centerY + (row * tileSize) - offsetY;
+        // Position on screen
+        final screenLeft = (tx * tileSize - centerPixelX) * scale + (width / 2.0);
+        final screenTop = (ty * tileSize - centerPixelY) * scale + (height / 2.0);
+        final screenTileSize = tileSize * scale;
 
-        final url = _getTileUrl(zoom, tileX, tileY);
+        final primaryUrl = getTileUrl(providerType, baseZoom, wrappedTileX, ty);
+        final fallbackUrl = (providerType == TileProviderType.esriStreet)
+            ? getTileUrl(TileProviderType.cartoPositron, baseZoom, wrappedTileX, ty)
+            : getTileUrl(TileProviderType.esriStreet, baseZoom, wrappedTileX, ty);
 
         tileWidgets.add(
           Positioned(
-            left: left,
-            top: top,
-            width: tileSize,
-            height: tileSize,
+            left: screenLeft,
+            top: screenTop,
+            width: screenTileSize + 0.5, // slight overlap to prevent hairline seams
+            height: screenTileSize + 0.5,
             child: Opacity(
               opacity: opacity,
-              child: Image.network(
-                url,
-                fit: BoxFit.cover,
-                headers: const {
-                  'User-Agent': 'QuietPath/1.0 (contact@quietpath.app)',
-                },
-                loadingBuilder: (ctx, child, progress) {
-                  if (progress == null) return child;
-                  return Container(
-                    color: const Color(0xFFEFF2EE),
-                    child: const Center(
-                      child: SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 1.5,
-                          color: Color(0xFFBDD9BB),
-                        ),
-                      ),
-                    ),
-                  );
-                },
-                errorBuilder: (ctx, err, stack) {
-                  debugPrint('TILE_ERROR: $url -> $err');
-                  return Container(
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEFF2EE),
-                      border: Border.all(color: const Color(0xFFE0E5DF), width: 0.5),
-                    ),
-                  );
-                },
+              child: ResilientMapTile(
+                key: ValueKey('$baseZoom-$wrappedTileX-$ty'),
+                primaryUrl: primaryUrl,
+                fallbackUrl: fallbackUrl,
               ),
             ),
           ),
@@ -142,11 +189,82 @@ class SensoryTileLayer extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          // Sensory tint backing
           Container(color: const Color(0xFFEFF2EE)),
           ...tileWidgets,
         ],
       ),
+    );
+  }
+}
+
+/// A highly resilient slippy tile image that tries the primary URL,
+/// automatically falling back to an alternate global tile server if blocked or unavailable.
+class ResilientMapTile extends StatefulWidget {
+  final String primaryUrl;
+  final String fallbackUrl;
+
+  const ResilientMapTile({
+    super.key,
+    required this.primaryUrl,
+    required this.fallbackUrl,
+  });
+
+  @override
+  State<ResilientMapTile> createState() => _ResilientMapTileState();
+}
+
+class _ResilientMapTileState extends State<ResilientMapTile> {
+  bool _useFallback = false;
+
+  static const Map<String, String> _browserHeaders = {
+    'User-Agent':
+        'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+  };
+
+  @override
+  void didUpdateWidget(covariant ResilientMapTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.primaryUrl != oldWidget.primaryUrl) {
+      setState(() {
+        _useFallback = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activeUrl = _useFallback ? widget.fallbackUrl : widget.primaryUrl;
+
+    return Image.network(
+      activeUrl,
+      key: ValueKey(activeUrl),
+      fit: BoxFit.cover,
+      headers: _browserHeaders,
+      loadingBuilder: (ctx, child, progress) {
+        if (progress == null) return child;
+        return Container(color: const Color(0xFFEFF2EE));
+      },
+      errorBuilder: (ctx, err, stack) {
+        if (!_useFallback) {
+          // Switch immediately to fallback tile server without showing a blank screen
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              setState(() {
+                _useFallback = true;
+              });
+            }
+          });
+          return Container(color: const Color(0xFFEFF2EE));
+        }
+
+        // Both primary and fallback failed - render subtle soft grid
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFFEFF2EE),
+            border: Border.all(color: const Color(0xFFE4E9E3), width: 0.5),
+          ),
+        );
+      },
     );
   }
 }

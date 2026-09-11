@@ -3,6 +3,16 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:quietpath_flutter/features/profile/data/profile_models.dart';
 
+/// Map cartography display mode:
+/// - googleMaps: Google Maps Platform vector map with custom low-contrast sensory styling
+/// - streetTiles: High-resolution Esri World Street / OSM slippy raster tiles
+/// - pureCanvas: Abstract low-stimulus sensory vector canvas
+enum MapDisplayMode {
+  googleMaps,
+  streetTiles,
+  pureCanvas,
+}
+
 /// Persistent on-device configuration and user preferences service.
 /// Stores sensory profile, onboarding status, and UI settings locally in JSON format.
 class AppConfigService {
@@ -22,6 +32,7 @@ class AppConfigService {
     trafficSensitivity: 0.5,
     timePenaltyTolerance: 0.5,
   );
+  MapDisplayMode _mapDisplayMode = MapDisplayMode.googleMaps;
   bool _showStreetTiles = true;
   bool _showSensoryCanopy = true;
   bool _autoRerouteEnabled = true;
@@ -33,6 +44,7 @@ class AppConfigService {
   // Getters
   bool get hasCompletedOnboarding => _hasCompletedOnboarding;
   SensoryProfile get sensoryProfile => _sensoryProfile;
+  MapDisplayMode get mapDisplayMode => _mapDisplayMode;
   bool get showStreetTiles => _showStreetTiles;
   bool get showSensoryCanopy => _showSensoryCanopy;
   bool get autoRerouteEnabled => _autoRerouteEnabled;
@@ -102,6 +114,16 @@ class AppConfigService {
         _sensoryProfile = SensoryProfile.fromJson(profileJson);
       }
     }
+    if (json.containsKey('map_display_mode')) {
+      final modeStr = json['map_display_mode'] as String?;
+      if (modeStr == 'googleMaps') {
+        _mapDisplayMode = MapDisplayMode.googleMaps;
+      } else if (modeStr == 'streetTiles') {
+        _mapDisplayMode = MapDisplayMode.streetTiles;
+      } else if (modeStr == 'pureCanvas') {
+        _mapDisplayMode = MapDisplayMode.pureCanvas;
+      }
+    }
     if (json.containsKey('show_street_tiles')) {
       _showStreetTiles = json['show_street_tiles'] as bool? ?? true;
     }
@@ -129,6 +151,7 @@ class AppConfigService {
     return {
       'has_completed_onboarding': _hasCompletedOnboarding,
       'sensory_profile': _sensoryProfile.toJson(),
+      'map_display_mode': _mapDisplayMode.name,
       'show_street_tiles': _showStreetTiles,
       'show_sensory_canopy': _showSensoryCanopy,
       'auto_reroute_enabled': _autoRerouteEnabled,
@@ -169,9 +192,19 @@ class AppConfigService {
     await save();
   }
 
+  /// Updates map cartography mode.
+  Future<void> setMapDisplayMode(MapDisplayMode mode) async {
+    _mapDisplayMode = mode;
+    _showStreetTiles = mode != MapDisplayMode.pureCanvas;
+    await save();
+  }
+
   /// Updates street tiles visibility.
   Future<void> setStreetTiles(bool value) async {
     _showStreetTiles = value;
+    if (!value && _mapDisplayMode != MapDisplayMode.pureCanvas) {
+      _mapDisplayMode = MapDisplayMode.pureCanvas;
+    }
     await save();
   }
   Future<void> setShowStreetTiles(bool value) => setStreetTiles(value);

@@ -18,24 +18,27 @@ Modern AI workflows often default to Large Language Models for decision making. 
 
 ## 2. Multi-Criteria Decision Analysis (MCDA) Mathematical Formulation
 
-### 2.1 Sensory Route Cost Function
-Let an urban road network be represented as a directed graph $\mathcal{G} = (V, E)$, where $V$ is the set of intersections and $E$ is the set of road segments. Each segment $e \in E$ possesses a length $\ell(e)$ and a vector of environmental sensory attributes:
+### 2.1 Composite Sensory Edge Cost Function
+Let an urban road network be represented as a directed graph $\mathcal{G} = (V, E)$, where $V$ is the set of intersections and $E$ is the set of road segments. Each segment $e \in E$ possesses a length $\ell(e)$ and a vector of environmental sensory attributes. The total composite cost per edge $C_e$ is governed by the deterministic equation:
 
-$$\mathbf{x}(e) = \left[ x_{\text{noise}}(e),\, x_{\text{crowd}}(e),\, x_{\text{traffic}}(e),\, x_{\text{construction}}(e),\, x_{\text{light}}(e),\, x_{\text{aqi}}(e) \right]^T$$
+$$C_e = \sum_{i=1}^{n} w_i S_i(e) + H_e + A_e$$
 
-A user profile defines normalized sensitivity weights:
+where:
+1. **Weighted Base Sensory Vector $\sum w_i S_i(e)$:**
+   $$\mathbf{S}(e) = \left[ S_{\text{noise}}(e),\, S_{\text{crowd}}(e),\, S_{\text{traffic}}(e),\, S_{\text{light}}(e),\, S_{\text{surface}}(e) \right]^T$$
+   subject to user-calibrated weights $\mathbf{w}$ with $\sum w_i = 1.0, \, w_i \ge 0$.
 
-$$\mathbf{w} = \left[ w_{\text{noise}},\, w_{\text{crowd}},\, w_{\text{traffic}},\, w_{\text{construction}},\, w_{\text{light}},\, w_{\text{aqi}} \right]^T \quad \text{subject to} \quad \sum_{k=1}^{6} w_k = 1.0, \quad w_k \ge 0$$
+2. **Active Crowdsourced Hazard Field ($H_e$):**
+   Active unexpired incident spikes (jackhammers, loud sirens, police crowds) generate a spatial decaying Gaussian penalty:
+   $$H_e = \sum_{h \in \mathcal{H}_{\text{active}}} \frac{\text{Severity}_h}{5.0} \cdot \exp\left(-\frac{\text{dist}(e, \mathbf{p}_h)^2}{2\sigma_h^2}\right), \quad \sigma_h = 120\,\text{m}$$
 
-The sensory impedance (discomfort cost rate per meter) of edge $e$ is:
-
-$$c(e) = \sum_{k=1}^{6} w_k \cdot \phi_k\left(x_k(e)\right)$$
-
-where $\phi_k(\cdot) \in [0, 1]$ represents the normalized attribute penalty function.
+3. **Real-Time Atmospheric & External Sensory Telemetry Ingestion ($A_e$):**
+   Ingests live multi-sensor feeds (Open-Meteo REST API and official WAQI monitoring stations) measuring real-time PM2.5, PM10, European AQI, UV index, and solar irradiance:
+   $$A_e = w_{\text{aqi}} \cdot \phi_{\text{aqi}}(e) + w_{\text{light}} \cdot \phi_{\text{uv\_glare}}(e) + \psi_{\text{thermal}}(T_{\text{ambient}})$$
 
 ---
 
-### 2.2 Attribute Normalization Functions $\phi_k(x)$
+### 2.2 Attribute Normalization & Canopy Protection Equations
 
 #### 1. Acoustic Sound Pressure Level ($\phi_{\text{noise}}$)
 Human hearing perceives sound logarithmically, but psychological distress for hyperacusis scales exponentially above the calm comfort baseline ($45\,\text{dBA}$):
@@ -53,15 +56,19 @@ $$\phi_{\text{crowd}}(x) = \min\left(1.0, \, \left(\frac{\rho(e)}{\rho_{\max}}\r
 
 where $\rho(e)$ is pedestrians per square meter, with exponential penalization reflecting the panic threshold of sensory claustrophobia.
 
-#### 3. Air Quality Index ($\phi_{\text{aqi}}$)
-Derived from real-time Open-Meteo European Air Quality Index (AQI):
+#### 3. Real-Time Air Quality & Canopy Protection Modeling ($\phi_{\text{aqi}}$)
+Fine particulate matter ($PM_{2.5}$) and gaseous emissions penetrate open transit corridors while urban tree canopies and green park buffers filter airborne pollutants. Live European AQI ($0.0 \to 1.0$) is ingested with corridor-specific vegetation damping:
 
-$$\phi_{\text{aqi}}(x) = \min\left(1.0, \, \frac{\text{AQI}}{100.0}\right)$$
+$$\phi_{\text{aqi}}^{\text{calm}}(e) = \text{clamp}\left(0.05, \, 1.0, \, \text{round}\left(\text{AQI}_{\text{live}} \times 0.60\right)\right) \quad \text{[Canopy Protected]}$$
 
-#### 4. Construction Proximity Penalty ($\phi_{\text{construction}}$)
-Active construction is modeled as a decaying radial Gaussian hazard field centered at coordinate $\mathbf{p}_{\text{work}}$:
+$$\phi_{\text{aqi}}^{\text{fast}}(e) = \min\left(1.0, \, \text{round}\left(\text{AQI}_{\text{live}} \times 1.35\right)\right) \quad \text{[Exposed Arterial]}$$
 
-$$\phi_{\text{construction}}(e) = \exp\left(-\frac{\text{dist}(e, \mathbf{p}_{\text{work}})^2}{2\sigma_{\text{hazard}}^2}\right), \quad \sigma_{\text{hazard}} = 150\,\text{m}$$
+#### 4. Solar Glare & Direct UV Radiation Modeling ($\phi_{\text{light}}$)
+For photophobic and migraine-prone neurodivergent navigators, unshaded midday sun represents severe sensory stress. Live UV Index ($[0, 12]$) and Solar Glare index ($[0.0, 1.0]$) dynamically calibrate path illumination:
+
+$$\phi_{\text{light}}^{\text{calm}}(e) = \text{clamp}\left(0.05, \, 1.0, \, \text{round}\left(0.12 + \text{Glare}_{\text{live}} \times 0.35\right)\right) \quad \text{[Shaded Alleys/Parks]}$$
+
+$$\phi_{\text{light}}^{\text{fast}}(e) = \min\left(1.0, \, \text{round}\left(0.55 + \text{Glare}_{\text{live}} \times 0.50\right)\right) \quad \text{[Concrete Transit Way]}$$
 
 ---
 

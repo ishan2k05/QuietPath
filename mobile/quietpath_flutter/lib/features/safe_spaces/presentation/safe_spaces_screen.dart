@@ -250,7 +250,7 @@ class SafeSpacesScreen extends ConsumerWidget {
                           const Icon(Icons.spa_rounded, size: 11, color: QuietColors.primaryDark),
                           const SizedBox(width: 4),
                           Text(
-                            '${space.sensoryMatchScore ?? 92}% Match',
+                            '${space.sensoryMatchScore ?? 92}%',
                             style: GoogleFonts.inter(
                               fontSize: 11,
                               fontWeight: FontWeight.w700,
@@ -262,24 +262,7 @@ class SafeSpacesScreen extends ConsumerWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 5),
-
-                // Subtitle Row: Distance & Category
-                Row(
-                  children: [
-                    const Icon(Icons.location_on_outlined, size: 13, color: QuietColors.textMuted),
-                    const SizedBox(width: 3),
-                    Text(
-                      '${space.distanceMiles} mi away • ${space.category}',
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: QuietColors.textMuted,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 10),
 
                 // Bottom Row: 1 Subtle Highlight Tag + Compact Sanctuary Exit Button
                 Row(
