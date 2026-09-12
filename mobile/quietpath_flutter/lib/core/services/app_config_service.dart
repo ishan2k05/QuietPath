@@ -37,9 +37,9 @@ class AppConfigService {
   bool _showSensoryCanopy = true;
   bool _autoRerouteEnabled = true;
   bool _ttsVoiceEnabled = true;
-  double _lastKnownLat = 12.9716;
-  double _lastKnownLng = 77.5946;
-  String _currentDestination = 'Bangalore Golf Club';
+  double _lastKnownLat = 18.510408;
+  double _lastKnownLng = 73.937475;
+  String _currentDestination = 'Amanora Mall';
 
   // Getters
   bool get hasCompletedOnboarding => _hasCompletedOnboarding;

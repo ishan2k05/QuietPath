@@ -6,6 +6,10 @@ from app.schemas.sensory_profile import SensoryProfileBase
 class RouteEvaluateRequest(BaseModel):
     origin: str = Field("Cubbon Park Metro", description="Starting point or coordinates")
     destination: str = Field("Bangalore Golf Club", description="Destination or coordinates")
+    origin_lat: Optional[float] = Field(None, description="Starting latitude coordinate")
+    origin_lng: Optional[float] = Field(None, description="Starting longitude coordinate")
+    dest_lat: Optional[float] = Field(None, description="Destination latitude coordinate")
+    dest_lng: Optional[float] = Field(None, description="Destination longitude coordinate")
     profile: Optional[SensoryProfileBase] = None
 
 

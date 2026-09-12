@@ -33,15 +33,21 @@ class SafeSpacesScreen extends ConsumerWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Icon(Icons.hearing_rounded, color: QuietColors.primaryDark, size: 20),
-                  Text(
-                    'QuietPath',
-                    style: GoogleFonts.inter(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: QuietColors.primaryDark,
-                      letterSpacing: 0.5,
-                    ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.eco_rounded, color: QuietColors.primaryDark, size: 22),
+                      const SizedBox(width: 8),
+                      Text(
+                        'QuietPath',
+                        style: GoogleFonts.inter(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: QuietColors.primaryDark,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
                   ),
                   const Icon(Icons.emergency_share_outlined, color: QuietColors.textCharcoal, size: 20),
                 ],
@@ -262,7 +268,19 @@ class SafeSpacesScreen extends ConsumerWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
+                const SizedBox(height: 4),
+                // Real-Time Distance & Environmental Metadata
+                Text(
+                  '${space.category} • ${space.distanceMiles < 1.0 ? '${(space.distanceMiles * 1609).round()}m away' : '${(space.distanceMiles * 1.609).toStringAsFixed(1)} km away'}${space.quietZoneInfo != null ? ' • ${space.quietZoneInfo}' : ''}',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: QuietColors.textMuted,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 8),
 
                 // Bottom Row: 1 Subtle Highlight Tag + Compact Sanctuary Exit Button
                 Row(

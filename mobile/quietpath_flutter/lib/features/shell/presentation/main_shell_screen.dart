@@ -66,10 +66,10 @@ class _MainShellScreenState extends State<MainShellScreen> {
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
-          border: Border(top: BorderSide(color: Colors.grey.withOpacity(0.15), width: 1)),
+          border: Border(top: BorderSide(color: Colors.grey.withValues(alpha: 0.15), width: 1)),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.04),
+              color: Colors.black.withValues(alpha: 0.04),
               blurRadius: 10,
               offset: const Offset(0, -2),
             ),
@@ -165,7 +165,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
                   color: _voiceEnabled ? QuietColors.primaryLight : const Color(0xFFF1F3F5),
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: _voiceEnabled ? QuietColors.primary : Colors.grey.withOpacity(0.3),
+                    color: _voiceEnabled ? QuietColors.primary : Colors.grey.withValues(alpha: 0.3),
                     width: 2,
                   ),
                 ),

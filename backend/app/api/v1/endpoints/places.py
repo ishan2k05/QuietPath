@@ -123,6 +123,10 @@ def list_safe_spaces(
             )
         )
 
+    # Sort nearest places first so user always sees local sanctuaries
+    if lat is not None and lng is not None:
+        results.sort(key=lambda s: (s.distance_miles, -(s.sensory_match_score or 0)))
+
     return SafeSpaceListResponse(
         total=len(results),
         safe_spaces=results,

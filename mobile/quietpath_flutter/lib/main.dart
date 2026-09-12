@@ -9,9 +9,12 @@ import 'package:quietpath_flutter/features/safe_spaces/presentation/safe_spaces_
 import 'package:quietpath_flutter/features/navigation/presentation/active_navigation_screen.dart';
 import 'package:quietpath_flutter/features/splash/presentation/splash_screen.dart';
 
+import 'package:quietpath_flutter/core/services/local_database_service.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppConfigService().init();
+  await LocalDatabaseService().init();
   runApp(const ProviderScope(child: QuietPathApp()));
 }
 

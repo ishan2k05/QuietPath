@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:quietpath_flutter/core/services/tile_cache_service.dart';
 
 enum TileProviderType {
   googleRoads,
@@ -178,6 +180,10 @@ class SensoryTileLayer extends StatelessWidget {
                 key: ValueKey('$baseZoom-$wrappedTileX-$ty'),
                 primaryUrl: primaryUrl,
                 fallbackUrl: fallbackUrl,
+                providerType: providerType,
+                z: baseZoom,
+                x: wrappedTileX,
+                y: ty,
               ),
             ),
           ),
@@ -197,16 +203,24 @@ class SensoryTileLayer extends StatelessWidget {
   }
 }
 
-/// A highly resilient slippy tile image that tries the primary URL,
-/// automatically falling back to an alternate global tile server if blocked or unavailable.
+/// A highly resilient slippy tile image that tries local offline disk cache first,
+/// then primary URL, automatically falling back to an alternate global tile server if blocked or unavailable.
 class ResilientMapTile extends StatefulWidget {
   final String primaryUrl;
   final String fallbackUrl;
+  final TileProviderType? providerType;
+  final int? z;
+  final int? x;
+  final int? y;
 
   const ResilientMapTile({
     super.key,
     required this.primaryUrl,
     required this.fallbackUrl,
+    this.providerType,
+    this.z,
+    this.x,
+    this.y,
   });
 
   @override
@@ -215,6 +229,7 @@ class ResilientMapTile extends StatefulWidget {
 
 class _ResilientMapTileState extends State<ResilientMapTile> {
   bool _useFallback = false;
+  File? _cachedFile;
 
   static const Map<String, String> _browserHeaders = {
     'User-Agent':
@@ -222,17 +237,53 @@ class _ResilientMapTileState extends State<ResilientMapTile> {
   };
 
   @override
+  void initState() {
+    super.initState();
+    _checkLocalCache();
+  }
+
+  Future<void> _checkLocalCache() async {
+    if (widget.providerType != null && widget.z != null && widget.x != null && widget.y != null) {
+      final file = await TileCacheService().getCachedTileFile(
+        widget.providerType!,
+        widget.z!,
+        widget.x!,
+        widget.y!,
+      );
+      if (file != null && mounted) {
+        setState(() {
+          _cachedFile = file;
+        });
+      }
+    }
+  }
+
+  @override
   void didUpdateWidget(covariant ResilientMapTile oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.primaryUrl != oldWidget.primaryUrl) {
       setState(() {
         _useFallback = false;
+        _cachedFile = null;
       });
+      _checkLocalCache();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_cachedFile != null) {
+      return Image.file(
+        _cachedFile!,
+        key: ValueKey(_cachedFile!.path),
+        fit: BoxFit.cover,
+        errorBuilder: (ctx, err, stack) => _buildNetworkTile(),
+      );
+    }
+    return _buildNetworkTile();
+  }
+
+  Widget _buildNetworkTile() {
     final activeUrl = _useFallback ? widget.fallbackUrl : widget.primaryUrl;
 
     return Image.network(
@@ -241,7 +292,18 @@ class _ResilientMapTileState extends State<ResilientMapTile> {
       fit: BoxFit.cover,
       headers: _browserHeaders,
       loadingBuilder: (ctx, child, progress) {
-        if (progress == null) return child;
+        if (progress == null) {
+          // Asynchronously persist tile into disk cache for offline access
+          if (widget.providerType != null && widget.z != null && widget.x != null && widget.y != null) {
+            TileCacheService().fetchAndCacheTile(
+              widget.providerType!,
+              widget.z!,
+              widget.x!,
+              widget.y!,
+            );
+          }
+          return child;
+        }
         return Container(color: const Color(0xFFEFF2EE));
       },
       errorBuilder: (ctx, err, stack) {

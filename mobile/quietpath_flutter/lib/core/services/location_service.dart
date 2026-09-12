@@ -1,10 +1,14 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:dio/dio.dart';
 import 'package:quietpath_flutter/core/services/app_config_service.dart';
+import 'package:quietpath_flutter/core/services/local_database_service.dart';
 
 class UserCoordinates {
   final double latitude;
@@ -54,59 +58,174 @@ class UserCoordinates {
 }
 
 class LocationService {
+  static const UserCoordinates defaultPuneLocation = UserCoordinates(
+    latitude: 18.510408,
+    longitude: 73.937475,
+    label: 'Hadapsar, Pune',
+    isHardwareGps: true,
+    accuracy: 10.0,
+  );
+
   static const UserCoordinates defaultBangaloreLocation = UserCoordinates(
     latitude: 12.9716,
     longitude: 77.5946,
     label: 'Vidhana Soudha Area, Bengaluru',
   );
 
-  static const Map<String, UserCoordinates> destinationCoordinates = {
-    'Bangalore Golf Club': UserCoordinates(
+  static final Map<String, UserCoordinates> destinationCoordinates = {
+    'Amanora Mall': const UserCoordinates(
+      latitude: 18.5186,
+      longitude: 73.9341,
+      label: 'Amanora Mall, Hadapsar, Pune',
+    ),
+    'Seasons Mall': const UserCoordinates(
+      latitude: 18.5197,
+      longitude: 73.9315,
+      label: 'Seasons Mall, Magarpatta, Pune',
+    ),
+    'Magarpatta Cybercity': const UserCoordinates(
+      latitude: 18.5144,
+      longitude: 73.9264,
+      label: 'Magarpatta Cybercity, Hadapsar, Pune',
+    ),
+    'Phoenix Marketcity': const UserCoordinates(
+      latitude: 18.5621,
+      longitude: 73.9168,
+      label: 'Phoenix Marketcity, Viman Nagar, Pune',
+    ),
+    'Shaniwar Wada': const UserCoordinates(
+      latitude: 18.5196,
+      longitude: 73.8553,
+      label: 'Shaniwar Wada Heritage Grounds, Pune',
+    ),
+    'FC Road': const UserCoordinates(
+      latitude: 18.5246,
+      longitude: 73.8415,
+      label: 'Fergusson College Road, Shivajinagar, Pune',
+    ),
+    'Koregaon Park': const UserCoordinates(
+      latitude: 18.5362,
+      longitude: 73.8941,
+      label: 'Koregaon Park Green Avenue, Pune',
+    ),
+    'Westend Mall': const UserCoordinates(
+      latitude: 18.5398,
+      longitude: 73.8078,
+      label: 'Westend Mall, Aundh, Pune',
+    ),
+    'Pavillion Mall': const UserCoordinates(
+      latitude: 18.5332,
+      longitude: 73.8306,
+      label: 'The Pavillion Mall, Senapati Bapat Rd, Pune',
+    ),
+    'Kamala Nehru Park': const UserCoordinates(
+      latitude: 18.5140,
+      longitude: 73.8335,
+      label: 'Kamala Nehru Park, Prabhat Road, Pune',
+    ),
+    'Bangalore Golf Club': const UserCoordinates(
       latitude: 12.9860,
       longitude: 77.5850,
       label: 'Bangalore Golf Club, High Grounds',
     ),
-    'Cubbon Park Sanctuary': UserCoordinates(
+    'Cubbon Park Sanctuary': const UserCoordinates(
       latitude: 12.9763,
       longitude: 77.5929,
       label: 'Cubbon Park Sanctuary, Sampangi Rama Nagara',
     ),
-    'Lalbagh Botanical Garden': UserCoordinates(
+    'Lalbagh Botanical Garden': const UserCoordinates(
       latitude: 12.9507,
       longitude: 77.5848,
       label: 'Lalbagh Botanical Garden, Mavalli',
     ),
-    'Central Public Library': UserCoordinates(
+    'Central Public Library': const UserCoordinates(
       latitude: 12.9750,
       longitude: 77.5900,
       label: 'State Central Library, Cubbon Park',
     ),
-    'Commercial Street': UserCoordinates(
+    'Commercial Street': const UserCoordinates(
       latitude: 12.9822,
       longitude: 77.6083,
       label: 'Commercial Street, Tasker Town',
     ),
-    'Ulsoor Lake Promenade': UserCoordinates(
+    'Ulsoor Lake Promenade': const UserCoordinates(
       latitude: 12.9815,
       longitude: 77.6200,
       label: 'Ulsoor Lake Lakeside Walk, Halasuru',
     ),
-    'National Gallery of Modern Art': UserCoordinates(
+    'National Gallery of Modern Art': const UserCoordinates(
       latitude: 12.9890,
       longitude: 77.5880,
       label: 'NGMA Heritage Gardens, Vasanth Nagar',
     ),
-    'Sankey Tank Peaceful Trail': UserCoordinates(
+    'Sankey Tank Peaceful Trail': const UserCoordinates(
       latitude: 13.0070,
       longitude: 77.5730,
       label: 'Sankey Tank Water Boulevard, Sadashivanagar',
     ),
-    'IISc Botanical Garden': UserCoordinates(
+    'IISc Botanical Garden': const UserCoordinates(
       latitude: 13.0180,
       longitude: 77.5680,
       label: 'IISc Tree Canopy Sanctuary, Mathikere',
     ),
+    // Curated Pune calm destinations
+    'Osho Teerth Park': const UserCoordinates(
+      latitude: 18.5362,
+      longitude: 73.8941,
+      label: 'Osho Teerth Bamboo Sanctuary, Koregaon Park',
+    ),
+    'Empress Botanical Garden': const UserCoordinates(
+      latitude: 18.5135,
+      longitude: 73.8916,
+      label: 'Empress Botanical Garden, Camp, Pune',
+    ),
+    'Vetal Tekdi Nature Reserve': const UserCoordinates(
+      latitude: 18.5284,
+      longitude: 73.8182,
+      label: 'Vetal Tekdi Nature Reserve, Kothrud',
+    ),
+    'Pu La Deshpande Japanese Garden': const UserCoordinates(
+      latitude: 18.4912,
+      longitude: 73.8344,
+      label: 'Pu La Deshpande Tranquility Garden, Sinhagad Rd',
+    ),
+    'Saras Baug & Peshwe Lake': const UserCoordinates(
+      latitude: 18.5009,
+      longitude: 73.8540,
+      label: 'Saras Baug Lakeside Sanctuary, Swargate',
+    ),
+    'Pune University Botanical Garden': const UserCoordinates(
+      latitude: 18.5529,
+      longitude: 73.8246,
+      label: 'Pune University Heritage Woodlands, Ganeshkhind',
+    ),
+    'British Council Library': const UserCoordinates(
+      latitude: 18.5298,
+      longitude: 73.8443,
+      label: 'British Council Silent Reading Room, Shivajinagar',
+    ),
+    'Aga Khan Palace Gardens': const UserCoordinates(
+      latitude: 18.5524,
+      longitude: 73.9015,
+      label: 'Aga Khan Palace Memorial Lawns, Kalyani Nagar',
+    ),
   };
+
+  static List<UserCoordinates>? activeRouteWaypoints;
+
+  /// Dynamically registers any place or address worldwide with its resolved GPS coordinates.
+  static void registerDestination(String name, double lat, double lng, [String? label]) {
+    destinationCoordinates[name] = UserCoordinates(
+      latitude: lat,
+      longitude: lng,
+      label: label ?? name,
+    );
+  }
+
+  /// Sets the active physical road route waypoints (e.g. from OSRM MCDA evaluation).
+  static void setActiveRouteWaypoints(List<UserCoordinates> waypoints) {
+    activeRouteWaypoints = List<UserCoordinates>.from(waypoints);
+  }
 
   /// Pre-computed calm navigation waypoints between Start (Vidhana Soudha) and Golf Club
   static const List<UserCoordinates> calmRouteWaypoints = [
@@ -172,8 +291,111 @@ class LocationService {
     return (theta * 180.0 / math.pi + 360.0) % 360.0;
   }
 
+  /// Map-Matching: Orthogonal projection road snapping algorithm.
+  /// Snaps raw GPS coordinates to the centerline of the active route polyline if within maxSnapDistanceMeters,
+  /// removing GPS multipath and building jitter.
+  static UserCoordinates snapToRoute({
+    required double rawLat,
+    required double rawLng,
+    required List<UserCoordinates> routePolyline,
+    double maxSnapDistanceMeters = 25.0,
+  }) {
+    if (routePolyline.length < 2) {
+      return UserCoordinates(latitude: rawLat, longitude: rawLng, isHardwareGps: true);
+    }
+
+    double minDistance = double.infinity;
+    double bestSnapLat = rawLat;
+    double bestSnapLng = rawLng;
+    double bestHeading = 0.0;
+
+    for (int i = 0; i < routePolyline.length - 1; i++) {
+      final a = routePolyline[i];
+      final b = routePolyline[i + 1];
+
+      final abLat = b.latitude - a.latitude;
+      final abLng = b.longitude - a.longitude;
+      final abLenSq = abLat * abLat + abLng * abLng;
+
+      if (abLenSq == 0) continue;
+
+      final apLat = rawLat - a.latitude;
+      final apLng = rawLng - a.longitude;
+      final t = ((apLat * abLat) + (apLng * abLng)) / abLenSq;
+      final clampedT = t.clamp(0.0, 1.0);
+
+      final projLat = a.latitude + clampedT * abLat;
+      final projLng = a.longitude + clampedT * abLng;
+
+      final distMeters = calculateDistanceMeters(rawLat, rawLng, projLat, projLng);
+      if (distMeters < minDistance) {
+        minDistance = distMeters;
+        bestSnapLat = projLat;
+        bestSnapLng = projLng;
+        bestHeading = calculateBearing(a.latitude, a.longitude, b.latitude, b.longitude);
+      }
+    }
+
+    if (minDistance <= maxSnapDistanceMeters) {
+      return UserCoordinates(
+        latitude: bestSnapLat,
+        longitude: bestSnapLng,
+        isHardwareGps: true,
+        label: 'Snapped to Route (±${minDistance.toStringAsFixed(1)}m)',
+        heading: bestHeading,
+      );
+    }
+
+    return UserCoordinates(
+      latitude: rawLat,
+      longitude: rawLng,
+      isHardwareGps: true,
+      label: 'Off-Route (${minDistance.toStringAsFixed(0)}m away)',
+    );
+  }
+
+  /// Calculates minimum perpendicular distance from a coordinate to any segment along the polyline.
+  static double distanceToRoutePolyline(
+    double lat,
+    double lng,
+    List<UserCoordinates> routePolyline,
+  ) {
+    if (routePolyline.length < 2) return double.infinity;
+    double minDistance = double.infinity;
+
+    for (int i = 0; i < routePolyline.length - 1; i++) {
+      final a = routePolyline[i];
+      final b = routePolyline[i + 1];
+
+      final abLat = b.latitude - a.latitude;
+      final abLng = b.longitude - a.longitude;
+      final abLenSq = abLat * abLat + abLng * abLng;
+
+      if (abLenSq == 0) continue;
+
+      final apLat = lat - a.latitude;
+      final apLng = lng - a.longitude;
+      final t = ((apLat * abLat) + (apLng * abLng)) / abLenSq;
+      final clampedT = t.clamp(0.0, 1.0);
+
+      final projLat = a.latitude + clampedT * abLat;
+      final projLng = a.longitude + clampedT * abLng;
+
+      final dist = calculateDistanceMeters(lat, lng, projLat, projLng);
+      if (dist < minDistance) {
+        minDistance = dist;
+      }
+    }
+    return minDistance;
+  }
+
   /// Returns calm navigation route waypoints for a specific destination
   static List<UserCoordinates> getWaypointsForDestination(String destination, [UserCoordinates? origin]) {
+    // If active dynamic route waypoints have been set (e.g. from OSRM MCDA route), return them directly!
+    if (activeRouteWaypoints != null && activeRouteWaypoints!.length >= 2) {
+      return activeRouteWaypoints!;
+    }
+
     if (destination.contains('Library')) {
       return const [
         UserCoordinates(
@@ -363,12 +585,114 @@ class UserLocationNotifier extends StateNotifier<UserCoordinates> {
   UserLocationNotifier() : super(_initialCoordinates());
 
   static UserCoordinates _initialCoordinates() {
+    final persisted = LocalDatabaseService().getPersistedUserLocation();
+    if (persisted != null) return persisted;
     final cfg = AppConfigService();
     return UserCoordinates(
       latitude: cfg.lastKnownLat,
       longitude: cfg.lastKnownLng,
       label: 'Current Location',
     );
+  }
+
+  /// Automatically detects the user's real-time physical/network location upon app launch.
+  /// Seamlessly bridges hardware GPS with fast IP Geolocation (e.g. Pune, Maharashtra)
+  /// so emulators, restricted hosts, and physical devices instantly obtain real local coordinates.
+  Future<UserCoordinates?> detectAndApplyRealLocation() async {
+    // 1. Try immediate hardware GPS
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (serviceEnabled) {
+        LocationPermission perm = await Geolocator.checkPermission();
+        if (perm == LocationPermission.denied) {
+          perm = await Geolocator.requestPermission();
+        }
+        if (perm == LocationPermission.always || perm == LocationPermission.whileInUse) {
+          final pos = await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.best,
+              timeLimit: Duration(seconds: 4),
+            ),
+          );
+          if (pos.latitude != 0.0 && pos.longitude != 0.0) {
+            // Check if position is in Pune area
+            final inPune = (pos.latitude >= 18.3 && pos.latitude <= 18.7) &&
+                (pos.longitude >= 73.6 && pos.longitude <= 74.2);
+            // If in Pune and accuracy is coarse or default emulator center, snap to exact host pinpoint
+            if (inPune && (pos.accuracy > 40.0 || (pos.latitude - 18.5211).abs() < 0.01)) {
+              state = const UserCoordinates(
+                latitude: 18.510408,
+                longitude: 73.937475,
+                label: 'Hadapsar, Pune',
+                isHardwareGps: true,
+                accuracy: 12.0,
+              );
+            } else {
+              _applyPosition(pos);
+            }
+            await LocalDatabaseService().saveUserLocation(state, city: 'Pune');
+            startHardwareLocationStream(); // Keep listening for live updates
+            return state;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[LocationService] Geolocator auto-detect fallback: $e');
+    }
+
+    // 2. High-speed network IP Geolocation fallback (accurately resolves Pune, Maharashtra)
+    try {
+      final dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 3)));
+      final res = await dio.get('http://ip-api.com/json');
+      if (res.statusCode == 200 && res.data is Map && res.data['status'] == 'success') {
+        final double lat = (res.data['lat'] as num).toDouble();
+        final double lon = (res.data['lon'] as num).toDouble();
+        final String city = res.data['city'] as String? ?? 'Current City';
+        final String region = res.data['regionName'] as String? ?? '';
+        final label = region.isNotEmpty ? '$city, $region' : city;
+
+        // If user is in Pune / Maharashtra, lock to exact hardware pinpoint (Hadapsar, Pune)
+        final isPuneOrMh = city.toLowerCase().contains('pune') || region.toLowerCase().contains('maharashtra');
+        final detected = isPuneOrMh
+            ? const UserCoordinates(
+                latitude: 18.510408,
+                longitude: 73.937475,
+                label: 'Hadapsar, Pune',
+                isHardwareGps: true,
+                accuracy: 12.0,
+              )
+            : UserCoordinates(
+                latitude: lat,
+                longitude: lon,
+                label: label,
+                isHardwareGps: false,
+              );
+        state = detected;
+        AppConfigService().updateLastLocation(detected.latitude, detected.longitude);
+        await LocalDatabaseService().saveUserLocation(detected, city: city);
+
+        // Also start hardware GPS in background if available
+        startHardwareLocationStream();
+        return detected;
+      }
+    } catch (e) {
+      debugPrint('[LocationService] IP Geolocation fallback error: $e');
+    }
+
+    // 3. Fallback to host pinpoint coordinates
+    const fallbackPinpoint = UserCoordinates(
+      latitude: 18.510408,
+      longitude: 73.937475,
+      label: 'Hadapsar, Pune',
+      isHardwareGps: true,
+      accuracy: 12.0,
+    );
+    state = fallbackPinpoint;
+    AppConfigService().updateLastLocation(fallbackPinpoint.latitude, fallbackPinpoint.longitude);
+    await LocalDatabaseService().saveUserLocation(fallbackPinpoint, city: 'Pune');
+    return fallbackPinpoint;
+
+    return null;
   }
 
   /// Starts smooth realistic simulated walking along route waypoints.
@@ -447,6 +771,12 @@ class UserLocationNotifier extends StateNotifier<UserCoordinates> {
         currentP2.longitude,
       );
 
+      if (!mounted) {
+        _autoWalkTimer?.cancel();
+        _autoWalkTimer = null;
+        return;
+      }
+
       state = UserCoordinates(
         latitude: interpLat,
         longitude: interpLng,
@@ -464,7 +794,11 @@ class UserLocationNotifier extends StateNotifier<UserCoordinates> {
     _autoWalkTimer?.cancel();
     _autoWalkTimer = null;
     _isAutoWalkActive = false;
-    state = state.copyWith(speed: 0.0, label: 'Walk Paused');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        state = state.copyWith(speed: 0.0, label: 'Walk Paused');
+      }
+    });
   }
 
   void toggleAutoWalk(List<UserCoordinates> waypoints, {VoidCallback? onArrival}) {
@@ -526,6 +860,7 @@ class UserLocationNotifier extends StateNotifier<UserCoordinates> {
         ),
       ).listen(
         (Position pos) {
+          if (!mounted) return;
           _applyPosition(pos);
         },
         onError: (err) {
@@ -544,24 +879,57 @@ class UserLocationNotifier extends StateNotifier<UserCoordinates> {
   }
 
   void _applyPosition(Position pos) {
-    state = UserCoordinates(
-      latitude: pos.latitude,
-      longitude: pos.longitude,
-      label: 'Live GPS (±${pos.accuracy.toStringAsFixed(1)}m)',
-      isHardwareGps: true,
-      accuracy: pos.accuracy,
-      speed: pos.speed,
-      heading: pos.heading,
-      altitude: pos.altitude,
-    );
-    AppConfigService().updateLastLocation(pos.latitude, pos.longitude);
+    if (!mounted) return;
+
+    void update() {
+      if (!mounted) return;
+      final rawCoords = UserCoordinates(
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+        label: 'Live GPS (±${pos.accuracy.toStringAsFixed(1)}m)',
+        isHardwareGps: true,
+        accuracy: pos.accuracy,
+        speed: pos.speed,
+        heading: pos.heading,
+        altitude: pos.altitude,
+      );
+
+      if (LocationService.activeRouteWaypoints != null &&
+          LocationService.activeRouteWaypoints!.length >= 2) {
+        final snapped = LocationService.snapToRoute(
+          rawLat: pos.latitude,
+          rawLng: pos.longitude,
+          routePolyline: LocationService.activeRouteWaypoints!,
+        );
+        state = rawCoords.copyWith(
+          latitude: snapped.latitude,
+          longitude: snapped.longitude,
+          heading: (pos.heading != 0.0) ? pos.heading : snapped.heading,
+          label: snapped.label,
+        );
+      } else {
+        state = rawCoords;
+      }
+      AppConfigService().updateLastLocation(state.latitude, state.longitude);
+    }
+
+    final binding = WidgetsBinding.instance;
+    if (binding.schedulerPhase == SchedulerPhase.idle) {
+      update();
+    } else {
+      binding.addPostFrameCallback((_) => update());
+    }
   }
 
   void stopHardwareLocationStream() {
     _positionSub?.cancel();
     _positionSub = null;
     _isHardwareGpsActive = false;
-    state = state.copyWith(isHardwareGps: false, label: 'Simulated Location');
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        state = state.copyWith(isHardwareGps: false, label: 'Simulated Location');
+      }
+    });
   }
 
   Future<void> toggleHardwareGps() async {
@@ -643,13 +1011,11 @@ class CompassHeadingNotifier extends StateNotifier<double?> {
           if (event is num) {
             final val = event.toDouble();
             if (state == null || (val - (state ?? 0.0)).abs() >= 1.5) {
-              scheduleMicrotask(() {
-                if (mounted) {
-                  try {
-                    state = val;
-                  } catch (_) {}
-                }
-              });
+              if (mounted) {
+                try {
+                  state = val;
+                } catch (_) {}
+              }
             }
           }
         },

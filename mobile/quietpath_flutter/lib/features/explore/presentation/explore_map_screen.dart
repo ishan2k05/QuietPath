@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/material.dart';
@@ -5,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:quietpath_flutter/core/services/app_config_service.dart';
+import 'package:quietpath_flutter/core/services/geocoding_service.dart';
 import 'package:quietpath_flutter/core/services/location_service.dart';
 import 'package:quietpath_flutter/core/theme/quietpath_theme.dart';
 import 'package:quietpath_flutter/features/explore/data/hazards_provider.dart';
@@ -41,6 +43,35 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
     _mapDisplayMode = cfg.mapDisplayMode;
     _showSensoryZones = cfg.showSensoryCanopy;
     _currentDestination = cfg.currentDestination;
+
+    // Detect user's real physical/network location upon launch (e.g. Pune)
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final locNotifier = ref.read(userLocationProvider.notifier);
+      final detected = await locNotifier.detectAndApplyRealLocation();
+      if (mounted) {
+        final UserCoordinates loc = detected ?? ref.read(userLocationProvider);
+        setState(() {
+          _cameraLat = loc.latitude;
+          _cameraLng = loc.longitude;
+        });
+
+        // If user is in/near Pune and current destination is default Bangalore Golf Club, switch to local calm destination
+        final distToPune = LocationService.calculateDistanceMeters(loc.latitude, loc.longitude, 18.5204, 73.8567);
+        if (distToPune < 250000 && _currentDestination == 'Bangalore Golf Club') {
+          setState(() {
+            _currentDestination = 'Osho Teerth Park';
+          });
+          AppConfigService().setCurrentDestination('Osho Teerth Park');
+        }
+
+        // Fetch real-time OSRM & MCDA sensory routes from user's actual location
+        ref.read(routesProvider.notifier).fetchRoutes(
+          destName: _currentDestination,
+          originLat: loc.latitude,
+          originLng: loc.longitude,
+        );
+      }
+    });
   }
 
   @override
@@ -135,83 +166,17 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
       builder: (ctx) {
         String searchQuery = '';
         String selectedCategory = 'All';
+        bool isSearching = false;
+        Timer? debounceTimer;
+        List<PlaceSearchResult> currentResults = GeocodingService.getSuggestionsForLocation(
+          userLat: userLocation.latitude,
+          userLng: userLocation.longitude,
+        );
 
-        final allDestinations = [
-          {
-            'name': 'Central Public Library',
-            'address': 'Cubbon Park, Sampangi Rama Nagara, Bengaluru',
-            'category': 'Safe Space / Library',
-            'badge': 'Silence Required',
-            'lat': 12.9750,
-            'lng': 77.5900,
-          },
-          {
-            'name': 'Bangalore Golf Club',
-            'address': 'Sankey Road, High Grounds, Bengaluru',
-            'category': 'Parks & Greenery',
-            'badge': 'Low Noise',
-            'lat': 12.9860,
-            'lng': 77.5850,
-          },
-          {
-            'name': 'Cubbon Park Sanctuary',
-            'address': 'Kasturba Road, Sampangi Rama Nagara, Bengaluru',
-            'category': 'Parks & Greenery',
-            'badge': 'Very Quiet',
-            'lat': 12.9763,
-            'lng': 77.5929,
-          },
-          {
-            'name': 'Lalbagh Botanical Garden',
-            'address': 'Mavalli, Near South End, Bengaluru',
-            'category': 'Parks & Greenery',
-            'badge': 'Low Stimulus',
-            'lat': 12.9507,
-            'lng': 77.5848,
-          },
-          {
-            'name': 'Ulsoor Lake Promenade',
-            'address': 'Ulsoor Road, Halasuru, Bengaluru',
-            'category': 'Water Promenades',
-            'badge': 'Water Breeze',
-            'lat': 12.9815,
-            'lng': 77.6200,
-          },
-          {
-            'name': 'National Gallery of Modern Art',
-            'address': '49 Palace Road, Vasanth Nagar, Bengaluru',
-            'category': 'Sanctuaries',
-            'badge': 'Peaceful Indoor',
-            'lat': 12.9890,
-            'lng': 77.5880,
-          },
-          {
-            'name': 'Sankey Tank Peaceful Trail',
-            'address': '11th Cross, Sadashivanagar, Bengaluru',
-            'category': 'Water Promenades',
-            'badge': 'Tree Canopy',
-            'lat': 13.0070,
-            'lng': 77.5730,
-          },
-          {
-            'name': 'IISc Botanical Garden',
-            'address': 'CV Raman Road, Mathikere, Bengaluru',
-            'category': 'Sanctuaries',
-            'badge': 'Nature Sanctuary',
-            'lat': 13.0180,
-            'lng': 77.5680,
-          },
-          {
-            'name': 'Commercial Street',
-            'address': 'Tasker Town, Shivaji Nagar, Bengaluru',
-            'category': 'Commercial',
-            'badge': 'High Activity',
-            'lat': 12.9822,
-            'lng': 77.6083,
-          },
-        ];
-
-        void selectAndNavigate(String destName) {
+        void selectAndNavigate(String destName, [double? lat, double? lng, String? label]) {
+          if (lat != null && lng != null) {
+            LocationService.registerDestination(destName, lat, lng, label);
+          }
           final coord = LocationService.destinationCoordinates[destName];
           setState(() {
             _currentDestination = destName;
@@ -223,46 +188,24 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
             }
           });
           AppConfigService().setCurrentDestination(destName);
-          ref.read(routesProvider.notifier).fetchRoutes();
+          ref.read(routesProvider.notifier).fetchRoutes(
+            destName: destName,
+            destLat: coord?.latitude,
+            destLng: coord?.longitude,
+          );
           TtsService().speakCalm('Destination set to $destName. Calculating calm route.');
           Navigator.pop(ctx);
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Route calculated to $destName',
-                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
-              ),
-              backgroundColor: QuietColors.primaryDark,
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 3),
-              action: SnackBarAction(
-                label: 'Start Nav',
-                textColor: Colors.white,
-                onPressed: () {
-                  context.push(
-                    '/navigation',
-                    extra: {'destination': destName},
-                  );
-                },
-              ),
-            ),
-          );
         }
 
         return StatefulBuilder(
           builder: (context, setSheetState) {
-            final filtered = allDestinations.where((d) {
-              final matchesQuery = searchQuery.isEmpty ||
-                  (d['name'] as String).toLowerCase().contains(searchQuery.toLowerCase()) ||
-                  (d['address'] as String).toLowerCase().contains(searchQuery.toLowerCase()) ||
-                  (d['badge'] as String).toLowerCase().contains(searchQuery.toLowerCase());
-              final matchesCat = selectedCategory == 'All' || d['category'] == selectedCategory;
-              return matchesQuery && matchesCat;
+            final filtered = currentResults.where((place) {
+              if (selectedCategory == 'All') return true;
+              return place.category == selectedCategory;
             }).toList();
 
             final hasCustomQuery = searchQuery.trim().isNotEmpty &&
-                !allDestinations.any((d) => (d['name'] as String).toLowerCase() == searchQuery.trim().toLowerCase());
+                !currentResults.any((p) => p.name.toLowerCase() == searchQuery.trim().toLowerCase());
 
             return Container(
               height: MediaQuery.of(context).size.height * 0.78,
@@ -288,18 +231,23 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // Header Row with GPS Telemetry Status
+                  // Header Row with Live Telemetry Status
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text(
-                        'GPS Destination Search',
-                        style: GoogleFonts.inter(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: QuietColors.textCharcoal,
+                      Expanded(
+                        child: Text(
+                          'Places & Sanctuaries',
+                          style: GoogleFonts.inter(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            color: QuietColors.textCharcoal,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      const SizedBox(width: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
@@ -338,7 +286,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  // Interactive GPS Search Text Field
+                  // Universal Autocomplete Text Field
                   Container(
                     decoration: BoxDecoration(
                       color: const Color(0xFFF5F7F5),
@@ -349,15 +297,35 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                       controller: searchController,
                       style: GoogleFonts.inter(fontSize: 14, color: QuietColors.textCharcoal),
                       decoration: InputDecoration(
-                        hintText: 'Search calm places, parks, safe spaces, coordinates...',
+                        hintText: 'Search any address, city, landmark, coordinates...',
                         hintStyle: GoogleFonts.inter(fontSize: 13, color: QuietColors.textMuted),
-                        prefixIcon: const Icon(Icons.search_rounded, color: QuietColors.primaryDark, size: 20),
+                        prefixIcon: isSearching
+                            ? const Padding(
+                                padding: EdgeInsets.all(12),
+                                child: SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: QuietColors.primaryDark,
+                                  ),
+                                ),
+                              )
+                            : const Icon(Icons.search_rounded, color: QuietColors.primaryDark, size: 20),
                         suffixIcon: searchQuery.isNotEmpty
                             ? IconButton(
                                 icon: const Icon(Icons.clear_rounded, size: 18, color: QuietColors.textMuted),
                                 onPressed: () {
                                   searchController.clear();
-                                  setSheetState(() => searchQuery = '');
+                                  debounceTimer?.cancel();
+                                  setSheetState(() {
+                                    searchQuery = '';
+                                    isSearching = false;
+                                    currentResults = GeocodingService.getSuggestionsForLocation(
+                                      userLat: userLocation.latitude,
+                                      userLng: userLocation.longitude,
+                                    );
+                                  });
                                 },
                               )
                             : null,
@@ -366,10 +334,56 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                       ),
                       onChanged: (val) {
                         setSheetState(() => searchQuery = val);
+                        debounceTimer?.cancel();
+                        if (val.trim().isEmpty) {
+                          setSheetState(() {
+                            isSearching = false;
+                            currentResults = GeocodingService.getSuggestionsForLocation(
+                              userLat: userLocation.latitude,
+                              userLng: userLocation.longitude,
+                            );
+                          });
+                        } else {
+                          final instantLocal = GeocodingService.getLocalMatches(
+                            val.trim(),
+                            userLat: userLocation.latitude,
+                            userLng: userLocation.longitude,
+                          );
+                          setSheetState(() {
+                            isSearching = true;
+                            if (instantLocal.isNotEmpty) {
+                              currentResults = instantLocal;
+                            }
+                          });
+                          debounceTimer = Timer(const Duration(milliseconds: 320), () async {
+                            final results = await GeocodingService().searchPlaces(
+                              val.trim(),
+                              userLat: userLocation.latitude,
+                              userLng: userLocation.longitude,
+                            );
+                            if (ctx.mounted) {
+                              setSheetState(() {
+                                isSearching = false;
+                                currentResults = results;
+                              });
+                            }
+                          });
+                        }
                       },
-                      onSubmitted: (val) {
-                        if (val.trim().isNotEmpty) {
-                          selectAndNavigate(val.trim());
+                      onSubmitted: (val) async {
+                        final query = val.trim();
+                        if (query.isNotEmpty) {
+                          final results = await GeocodingService().searchPlaces(
+                            query,
+                            userLat: userLocation.latitude,
+                            userLng: userLocation.longitude,
+                          );
+                          if (results.isNotEmpty) {
+                            final top = results.first;
+                            selectAndNavigate(top.name, top.latitude, top.longitude, top.formattedAddress);
+                          } else {
+                            selectAndNavigate(query);
+                          }
                         }
                       },
                     ),
@@ -440,29 +454,35 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                               ),
                             ),
                             subtitle: Text(
-                              'Custom GPS destination / coordinate navigation',
+                              'Global coordinates / custom destination routing',
                               style: GoogleFonts.inter(fontSize: 11, color: QuietColors.textMuted),
                             ),
                             trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: QuietColors.primaryDark),
-                            onTap: () => selectAndNavigate(searchQuery.trim()),
+                            onTap: () async {
+                              final results = await GeocodingService().searchPlaces(
+                                searchQuery.trim(),
+                                userLat: userLocation.latitude,
+                                userLng: userLocation.longitude,
+                              );
+                              if (results.isNotEmpty) {
+                                final top = results.first;
+                                selectAndNavigate(top.name, top.latitude, top.longitude, top.formattedAddress);
+                              } else {
+                                selectAndNavigate(searchQuery.trim());
+                              }
+                            },
                           ),
                           const Divider(height: 12),
                         ],
 
-                        // Filtered Destinations
-                        ...filtered.map((dest) {
-                          final name = dest['name'] as String;
-                          final address = dest['address'] as String;
-                          final badge = dest['badge'] as String;
-                          final lat = (dest['lat'] as num).toDouble();
-                          final lng = (dest['lng'] as num).toDouble();
-                          final isSelected = name == _currentDestination;
-
+                        // Global & Sanctuary Places Results
+                        ...filtered.map((place) {
+                          final isSelected = place.name == _currentDestination;
                           final distanceMeters = LocationService.calculateDistanceMeters(
                             userLocation.latitude,
                             userLocation.longitude,
-                            lat,
-                            lng,
+                            place.latitude,
+                            place.longitude,
                           );
                           final distanceStr = distanceMeters >= 1000
                               ? '${(distanceMeters / 1000).toStringAsFixed(1)} km'
@@ -477,7 +497,9 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                                 shape: BoxShape.circle,
                               ),
                               child: Icon(
-                                Icons.location_on_rounded,
+                                place.isCuratedSanctuary
+                                    ? Icons.spa_rounded
+                                    : Icons.location_on_rounded,
                                 color: isSelected ? QuietColors.primaryDark : QuietColors.textCharcoal,
                                 size: 20,
                               ),
@@ -486,7 +508,9 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                               children: [
                                 Expanded(
                                   child: Text(
-                                    name,
+                                    place.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: GoogleFonts.inter(
                                       fontSize: 14,
                                       fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
@@ -494,38 +518,79 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                                     ),
                                   ),
                                 ),
+                                const SizedBox(width: 8),
+                                if (place.sensoryScore != null) ...[
+                                  Container(
+                                    margin: const EdgeInsets.only(right: 6),
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: place.sensoryScore! >= 80
+                                          ? const Color(0xFFE8F5E9)
+                                          : const Color(0xFFFFF3E0),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      '${place.sensoryScore!.round()}',
+                                      style: GoogleFonts.inter(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w700,
+                                        color: place.sensoryScore! >= 80
+                                            ? QuietColors.primaryDark
+                                            : const Color(0xFFE65100),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                                 Text(
                                   distanceStr,
                                   style: GoogleFonts.inter(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: QuietColors.textMuted,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: QuietColors.primaryDark,
                                   ),
                                 ),
                               ],
                             ),
-                            subtitle: Text(
-                              address,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.inter(fontSize: 11, color: QuietColors.textMuted),
-                            ),
-                            trailing: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF1F6F0),
-                                borderRadius: BorderRadius.circular(8),
+                            subtitle: Padding(
+                              padding: const EdgeInsets.only(top: 3.0),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      place.formattedAddress,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: GoogleFonts.inter(fontSize: 11, color: QuietColors.textMuted),
+                                    ),
+                                  ),
+                                  if (place.badge.isNotEmpty) ...[
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFFF1F6F0),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        place.badge,
+                                        style: GoogleFonts.inter(
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.w600,
+                                          color: QuietColors.primaryDark,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
                               ),
-                              child: Text(
-                                badge,
-                                style: GoogleFonts.inter(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: QuietColors.primaryDark,
-                                ),
-                              ),
                             ),
-                            onTap: () => selectAndNavigate(name),
+                            trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 13, color: QuietColors.textMuted),
+                            onTap: () => selectAndNavigate(
+                              place.name,
+                              place.latitude,
+                              place.longitude,
+                              place.formattedAddress,
+                            ),
                           );
                         }),
 
@@ -534,7 +599,9 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                             padding: const EdgeInsets.symmetric(vertical: 24.0),
                             child: Center(
                               child: Text(
-                                'No matching calm locations found.\nType any place or coordinates to route.',
+                                isSearching
+                                    ? 'Searching global places & calm routes...'
+                                    : 'No matching locations found.\nType any place, city, or coordinates worldwide.',
                                 textAlign: TextAlign.center,
                                 style: GoogleFonts.inter(fontSize: 13, color: QuietColors.textMuted),
                               ),
@@ -584,7 +651,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                       width: 40,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.3),
+                        color: Colors.grey.withValues(alpha: 0.3),
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -748,7 +815,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                       fillColor: const Color(0xFFF8F9FA),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide(color: Colors.grey.withOpacity(0.2)),
+                        borderSide: BorderSide(color: Colors.grey.withValues(alpha: 0.2)),
                       ),
                     ),
                     style: GoogleFonts.inter(fontSize: 13),
@@ -847,7 +914,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                     width: 40,
                     height: 4,
                     decoration: BoxDecoration(
-                      color: Colors.grey.withOpacity(0.3),
+                      color: Colors.grey.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(2),
                     ),
                   ),
@@ -1203,6 +1270,59 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
     final isCalmestSelected =
         routesState.selectedRouteId == 'route_calmest' || routesState.selectedRouteId == null;
 
+    final targetCoords = LocationService.destinationCoordinates[_currentDestination];
+    final calcDistM = targetCoords != null
+        ? LocationService.calculateDistanceMeters(
+            userLocation.latitude, userLocation.longitude, targetCoords.latitude, targetCoords.longitude)
+        : 2400.0;
+    final fallbackDistKm = math.max(0.4, double.parse((calcDistM / 1000.0).toStringAsFixed(1)));
+    final fallbackCalmMins = math.max(3, (fallbackDistKm / 4.2 * 60).round());
+    final fallbackFastMins = math.max(2, (fallbackDistKm / 5.0 * 60).round());
+
+    final calmRoute = routesState.routes.isNotEmpty
+        ? routesState.routes.firstWhere((r) => r.isRecommended, orElse: () => routesState.routes.first)
+        : RouteOptionData(
+            id: 'route_calmest',
+            name: 'Calmest Route',
+            durationMinutes: fallbackCalmMins,
+            distanceKm: fallbackDistKm,
+            sensoryScore: 87.0,
+            isRecommended: true,
+            isFastest: false,
+            badges: ['★ Recommended for You', 'Low Noise Corridor', 'Low Crowd'],
+            turnInstructions: ['Turn right onto calm pathway'],
+            factorBreakdown: {
+              'noise': {'impact_percentage': 14.0},
+              'crowd': {'impact_percentage': 18.0},
+              'traffic': {'impact_percentage': 9.0},
+              'construction': {'impact_percentage': 4.0},
+              'light': {'impact_percentage': 20.0},
+              'air_quality': {'impact_percentage': 28.0},
+            },
+          );
+
+    final fastRoute = routesState.routes.length > 1
+        ? routesState.routes.firstWhere((r) => r.isFastest, orElse: () => routesState.routes.last)
+        : RouteOptionData(
+            id: 'route_fastest',
+            name: 'Quickest Route',
+            durationMinutes: fallbackFastMins,
+            distanceKm: math.max(0.3, double.parse((fallbackDistKm * 0.9).toStringAsFixed(1))),
+            sensoryScore: 42.0,
+            isRecommended: false,
+            isFastest: true,
+            badges: ['Quickest Route', 'High Traffic'],
+            turnInstructions: ['Head straight on main road'],
+            factorBreakdown: {
+              'noise': {'impact_percentage': 32.0},
+              'crowd': {'impact_percentage': 22.0},
+              'traffic': {'impact_percentage': 25.0},
+              'construction': {'impact_percentage': 16.0},
+              'light': {'impact_percentage': 18.0},
+              'air_quality': {'impact_percentage': 30.0},
+            },
+          );
+
     return Scaffold(
       backgroundColor: QuietColors.background,
       body: Stack(
@@ -1442,15 +1562,21 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Icon(Icons.hearing_rounded, color: QuietColors.primaryDark, size: 20),
-                      Text(
-                        'QuietPath',
-                        style: GoogleFonts.inter(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w700,
-                          color: QuietColors.primaryDark,
-                          letterSpacing: 0.5,
-                        ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.eco_rounded, color: QuietColors.primaryDark, size: 22),
+                          const SizedBox(width: 8),
+                          Text(
+                            'QuietPath',
+                            style: GoogleFonts.inter(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: QuietColors.primaryDark,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                        ],
                       ),
                       GestureDetector(
                         onTap: _openReportHazardSheet,
@@ -1744,8 +1870,8 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                                     const SizedBox(height: 2),
                                     Text(
                                       isCalmestSelected
-                                          ? 'Calmest Route • 16m (2.4 km)'
-                                          : 'Quickest Route • 12m (2.1 km)',
+                                          ? '${calmRoute.name} • ${calmRoute.durationMinutes}m (${calmRoute.distanceKm.toStringAsFixed(1)} km)'
+                                          : '${fastRoute.name} • ${fastRoute.durationMinutes}m (${fastRoute.distanceKm.toStringAsFixed(1)} km)',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: GoogleFonts.inter(
@@ -1767,14 +1893,14 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFF1F3F5),
+                               color: const Color(0xFFF1F3F5),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Text(
-                                  'Compare (2)',
+                                  'Compare (${routesState.routes.isNotEmpty ? routesState.routes.length : 2})',
                                   style: GoogleFonts.inter(
                                     fontSize: 11,
                                     fontWeight: FontWeight.w600,
@@ -1829,35 +1955,12 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                       context: context,
                       isRecommended: true,
                       isSelected: isCalmestSelected,
-                      title: 'Calmest Route',
-                      duration: '16 mins',
-                      sublabel: '2.4 km',
-                      score: '87',
-                      onTap: () => ref.read(routesProvider.notifier).selectRoute('route_calmest'),
-                      onExplain: () {
-                        final calm = routesState.routes.isNotEmpty
-                            ? routesState.routes.firstWhere((r) => r.isRecommended, orElse: () => routesState.routes.first)
-                            : RouteOptionData(
-                                id: 'route_calmest',
-                                name: 'Calmest Route',
-                                durationMinutes: 16,
-                                distanceKm: 2.4,
-                                sensoryScore: 87.0,
-                                isRecommended: true,
-                                isFastest: false,
-                                badges: ['★ Recommended for You', 'Low Noise', 'Low Crowd'],
-                                turnInstructions: ['Turn right onto Oak Trail'],
-                                factorBreakdown: {
-                                  'noise': {'impact_percentage': 14.0},
-                                  'crowd': {'impact_percentage': 18.0},
-                                  'traffic': {'impact_percentage': 9.0},
-                                  'construction': {'impact_percentage': 4.0},
-                                  'light': {'impact_percentage': 20.0},
-                                  'air_quality': {'impact_percentage': 28.0},
-                                },
-                              );
-                        _showExplainabilitySheet(context, calm);
-                      },
+                      title: calmRoute.name,
+                      duration: '${calmRoute.durationMinutes} mins',
+                      sublabel: '${calmRoute.distanceKm.toStringAsFixed(1)} km',
+                      score: '${calmRoute.sensoryScore.round()}',
+                      onTap: () => ref.read(routesProvider.notifier).selectRoute(calmRoute.id),
+                      onExplain: () => _showExplainabilitySheet(context, calmRoute),
                     ),
                     const SizedBox(height: 8),
 
@@ -1866,35 +1969,12 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                       context: context,
                       isRecommended: false,
                       isSelected: !isCalmestSelected,
-                      title: 'Quickest Route',
-                      duration: '12 mins',
-                      sublabel: '2.1 km',
-                      score: '42',
-                      onTap: () => ref.read(routesProvider.notifier).selectRoute('route_fastest'),
-                      onExplain: () {
-                        final fast = routesState.routes.length > 1
-                            ? routesState.routes.firstWhere((r) => r.isFastest, orElse: () => routesState.routes.last)
-                            : RouteOptionData(
-                                id: 'route_fastest',
-                                name: 'Quickest Route',
-                                durationMinutes: 12,
-                                distanceKm: 2.1,
-                                sensoryScore: 42.0,
-                                isRecommended: false,
-                                isFastest: true,
-                                badges: ['Quickest Route', 'High Traffic'],
-                                turnInstructions: ['Head north on Commercial Main Road'],
-                                factorBreakdown: {
-                                  'noise': {'impact_percentage': 32.0},
-                                  'crowd': {'impact_percentage': 22.0},
-                                  'traffic': {'impact_percentage': 25.0},
-                                  'construction': {'impact_percentage': 16.0},
-                                  'light': {'impact_percentage': 18.0},
-                                  'air_quality': {'impact_percentage': 30.0},
-                                },
-                              );
-                        _showExplainabilitySheet(context, fast);
-                      },
+                      title: fastRoute.name,
+                      duration: '${fastRoute.durationMinutes} mins',
+                      sublabel: '${fastRoute.distanceKm.toStringAsFixed(1)} km',
+                      score: '${fastRoute.sensoryScore.round()}',
+                      onTap: () => ref.read(routesProvider.notifier).selectRoute(fastRoute.id),
+                      onExplain: () => _showExplainabilitySheet(context, fastRoute),
                     ),
                   ],
 
@@ -1915,7 +1995,8 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                         alignment: Alignment.center,
                       ),
                       onPressed: () {
-                        TtsService().speakCalm('Starting navigation to $_currentDestination via Calmest Route.');
+                        final chosenRoute = isCalmestSelected ? calmRoute : fastRoute;
+                        TtsService().speakCalm('Starting navigation to $_currentDestination via ${chosenRoute.name}.');
                         context.push(
                           '/navigation',
                           extra: {'destination': _currentDestination},
@@ -2031,7 +2112,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                   width: 40,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.grey.withOpacity(0.3),
+                    color: Colors.grey.withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),

@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:quietpath_flutter/core/network/api_client.dart';
+import 'package:quietpath_flutter/core/services/location_service.dart';
+import 'package:quietpath_flutter/core/services/local_database_service.dart';
 
 class SafeSpaceItem {
   final String id;
@@ -46,77 +48,169 @@ final selectedSpaceTagProvider = StateProvider<String>((ref) => 'All');
 
 final safeSpacesProvider = FutureProvider<List<SafeSpaceItem>>((ref) async {
   final tag = ref.watch(selectedSpaceTagProvider);
+  final userLocation = ref.watch(userLocationProvider);
+
   try {
     final dio = ApiClient().dio;
-    final query = (tag == 'All' || tag == 'Filters') ? '' : '?tag=${Uri.encodeComponent(tag)}';
-    final response = await dio.get('/places/safe-spaces$query');
-    final rawList = response.data['safe_spaces'] as List<dynamic>;
-    return rawList.map((e) => SafeSpaceItem.fromJson(e as Map<String, dynamic>)).toList();
-  } catch (e) {
-    final allSpaces = [
-      SafeSpaceItem(
-        id: 'sp_1',
-        name: 'Central Public Library',
-        category: 'Library',
-        distanceMiles: 0.3,
-        capacityPercentage: 25,
-        capacityStatus: 'Empty',
-        featureTags: ['Silence Required', 'Soft Seating'],
-        quietZoneInfo: 'Quiet Zone: Floor 3',
-        sensoryMatchScore: 94,
-      ),
-      SafeSpaceItem(
-        id: 'sp_4',
-        name: 'Cubbon Park Bamboo Grove',
-        category: 'Park / Nature',
-        distanceMiles: 0.4,
-        capacityPercentage: 15,
-        capacityStatus: 'Empty',
-        featureTags: ['Silence Required', 'Natural Environment', 'Dense Canopy'],
-        quietZoneInfo: 'Inner Grove Sanctuary',
-        sensoryMatchScore: 96,
-      ),
-      SafeSpaceItem(
-        id: 'sp_2',
-        name: 'Botanical Gardens Conservatory',
-        category: 'Park / Nature',
-        distanceMiles: 0.8,
-        capacityPercentage: 40,
-        capacityStatus: 'Low',
-        featureTags: ['Natural Environment', 'White Noise (Fountain)'],
-        bestSpot: 'Fern Room',
-        sensoryMatchScore: 91,
-      ),
-      SafeSpaceItem(
-        id: 'sp_5',
-        name: 'National Gallery of Modern Art',
-        category: 'Museum / Gallery',
-        distanceMiles: 1.1,
-        capacityPercentage: 30,
-        capacityStatus: 'Low',
-        featureTags: ['Soft Lighting', 'Silence Required', 'Air Conditioned'],
-        quietZoneInfo: 'Sculpture Garden & Gallery 2',
-        sensoryMatchScore: 89,
-      ),
-      SafeSpaceItem(
-        id: 'sp_3',
-        name: 'Mute Coffee Shop',
-        category: 'Cafe',
-        distanceMiles: 1.2,
-        capacityPercentage: 69,
-        capacityStatus: 'Moderate',
-        featureTags: ['Dim Lighting', 'No Background Music'],
-        quietZoneInfo: 'Dedicated Quiet Hour: Now',
-        sensoryMatchScore: 78,
-      ),
-    ];
-    if (tag == 'Low Noise') {
-      return allSpaces.where((s) => s.featureTags.any((t) => t.contains('Silence') || t.contains('Natural'))).toList();
-    } else if (tag == 'Low Crowd') {
-      return allSpaces.where((s) => s.capacityStatus == 'Empty' || s.capacityStatus == 'Low').toList();
-    } else if (tag == 'Silence Required') {
-      return allSpaces.where((s) => s.featureTags.any((t) => t.contains('Silence'))).toList();
+    final queryParams = <String>[];
+    if (tag != 'All' && tag != 'Filters') {
+      queryParams.add('tag=${Uri.encodeComponent(tag)}');
     }
-    return allSpaces;
+    queryParams.add('lat=${userLocation.latitude}');
+    queryParams.add('lng=${userLocation.longitude}');
+    final queryString = '?${queryParams.join('&')}';
+
+    final response = await dio.get('/places/safe-spaces$queryString');
+    final rawList = response.data['safe_spaces'] as List<dynamic>;
+    final items = rawList.map((e) => SafeSpaceItem.fromJson(e as Map<String, dynamic>)).toList();
+
+    // Cache locally for offline APK persistence
+    LocalDatabaseService().saveSafeSpaces(items.map((i) => {
+      'id': i.id,
+      'name': i.name,
+      'category': i.category,
+      'distance_miles': i.distanceMiles,
+      'capacity_percentage': i.capacityPercentage,
+      'capacity_status': i.capacityStatus,
+      'feature_tags': i.featureTags,
+      'quiet_zone_info': i.quietZoneInfo,
+      'best_spot': i.bestSpot,
+      'sensory_match_score': i.sensoryMatchScore,
+    }).toList());
+
+    return items;
+  } catch (e) {
+    // Offline local database fallback
+    final cached = LocalDatabaseService().getCachedSafeSpaces();
+    if (cached.isNotEmpty) {
+      final cachedItems = cached.map((e) => SafeSpaceItem.fromJson(e)).toList();
+      return _filterByTag(cachedItems, tag);
+    }
+
+    final distToPune = LocationService.calculateDistanceMeters(userLocation.latitude, userLocation.longitude, 18.5204, 73.8567);
+    final isPune = distToPune < 250000;
+
+    final allSpaces = isPune
+        ? [
+            SafeSpaceItem(
+              id: 'sp_pune_1',
+              name: 'Osho Teerth Bamboo Sanctuary',
+              category: 'Park / Nature',
+              distanceMiles: 0.6,
+              capacityPercentage: 18,
+              capacityStatus: 'Empty',
+              featureTags: ['Silence Required', 'Natural Environment', 'Dense Canopy'],
+              quietZoneInfo: 'Zen Bamboo Grove',
+              bestSpot: 'Stream Shaded Pavilion',
+              sensoryMatchScore: 96,
+            ),
+            SafeSpaceItem(
+              id: 'sp_pune_5',
+              name: 'British Council Silent Reading Room',
+              category: 'Library',
+              distanceMiles: 0.9,
+              capacityPercentage: 28,
+              capacityStatus: 'Low',
+              featureTags: ['Silence Required', 'Soft Seating', 'Air Conditioned'],
+              quietZoneInfo: 'Silent Reading Floor 2',
+              bestSpot: 'North Study Carrel',
+              sensoryMatchScore: 94,
+            ),
+            SafeSpaceItem(
+              id: 'sp_pune_2',
+              name: 'Empress Botanical Garden',
+              category: 'Botanical Garden',
+              distanceMiles: 1.4,
+              capacityPercentage: 35,
+              capacityStatus: 'Low',
+              featureTags: ['Natural Environment', 'White Noise (Fountain)', 'Shaded Trees'],
+              quietZoneInfo: 'Heritage Banyan Lawn',
+              bestSpot: 'Canopy Pavilion',
+              sensoryMatchScore: 92,
+            ),
+            SafeSpaceItem(
+              id: 'sp_pune_3',
+              name: 'Vetal Tekdi Hilltop Nature Refuge',
+              category: 'Nature Reserve',
+              distanceMiles: 1.8,
+              capacityPercentage: 15,
+              capacityStatus: 'Empty',
+              featureTags: ['Silence Required', 'Natural Environment', 'Zero Traffic'],
+              quietZoneInfo: 'Forest Trail Crest',
+              bestSpot: 'Sunrise Stone Outcrop',
+              sensoryMatchScore: 95,
+            ),
+            SafeSpaceItem(
+              id: 'sp_pune_4',
+              name: 'Pu La Deshpande Tranquility Garden',
+              category: 'Zen Garden',
+              distanceMiles: 2.2,
+              capacityPercentage: 25,
+              capacityStatus: 'Low',
+              featureTags: ['Silence Required', 'Water White Noise', 'Natural Landscape'],
+              quietZoneInfo: 'Koi Pond & Water Stream',
+              bestSpot: 'Wooden Meditation Bridge',
+              sensoryMatchScore: 91,
+            ),
+          ]
+        : [
+            SafeSpaceItem(
+              id: 'sp_1',
+              name: 'Central Public Library',
+              category: 'Library',
+              distanceMiles: 0.3,
+              capacityPercentage: 25,
+              capacityStatus: 'Empty',
+              featureTags: ['Silence Required', 'Soft Seating'],
+              quietZoneInfo: 'Quiet Zone: Floor 3',
+              sensoryMatchScore: 94,
+            ),
+            SafeSpaceItem(
+              id: 'sp_4',
+              name: 'Cubbon Park Bamboo Grove',
+              category: 'Park / Nature',
+              distanceMiles: 0.4,
+              capacityPercentage: 15,
+              capacityStatus: 'Empty',
+              featureTags: ['Silence Required', 'Natural Environment', 'Dense Canopy'],
+              quietZoneInfo: 'Inner Grove Sanctuary',
+              sensoryMatchScore: 96,
+            ),
+            SafeSpaceItem(
+              id: 'sp_2',
+              name: 'Botanical Gardens Conservatory',
+              category: 'Park / Nature',
+              distanceMiles: 0.8,
+              capacityPercentage: 40,
+              capacityStatus: 'Low',
+              featureTags: ['Natural Environment', 'White Noise (Fountain)'],
+              bestSpot: 'Fern Room',
+              sensoryMatchScore: 91,
+            ),
+            SafeSpaceItem(
+              id: 'sp_5',
+              name: 'National Gallery of Modern Art',
+              category: 'Museum / Gallery',
+              distanceMiles: 1.1,
+              capacityPercentage: 30,
+              capacityStatus: 'Low',
+              featureTags: ['Soft Lighting', 'Silence Required', 'Air Conditioned'],
+              quietZoneInfo: 'Sculpture Garden & Gallery 2',
+              sensoryMatchScore: 89,
+            ),
+          ];
+
+    return _filterByTag(allSpaces, tag);
   }
 });
+
+List<SafeSpaceItem> _filterByTag(List<SafeSpaceItem> items, String tag) {
+  if (tag == 'Low Noise') {
+    return items.where((s) => s.featureTags.any((t) => t.contains('Silence') || t.contains('Natural'))).toList();
+  } else if (tag == 'Low Crowd') {
+    return items.where((s) => s.capacityStatus == 'Empty' || s.capacityStatus == 'Low').toList();
+  } else if (tag == 'Silence Required') {
+    return items.where((s) => s.featureTags.any((t) => t.contains('Silence'))).toList();
+  }
+  return items;
+}

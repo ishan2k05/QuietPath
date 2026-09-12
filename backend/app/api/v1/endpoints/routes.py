@@ -15,4 +15,8 @@ async def evaluate_routes(request: RouteEvaluateRequest):
         origin=request.origin,
         destination=request.destination,
         profile=request.profile,
+        origin_lat=request.origin_lat,
+        origin_lng=request.origin_lng,
+        dest_lat=request.dest_lat,
+        dest_lng=request.dest_lng,
     )
