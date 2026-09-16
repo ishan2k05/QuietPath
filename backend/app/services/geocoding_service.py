@@ -99,17 +99,46 @@ class GeocodingService:
         if query_clean.lower() in _GEO_CACHE:
             return _GEO_CACHE[query_clean.lower()]
 
-        # 3. Live OpenStreetMap Nominatim Query
+        # 3. Live OpenStreetMap Geocoding (Photon & Nominatim for Universal Coverage)
+        try:
+            # Try Photon first (fast, worldwide, free, high rate limit)
+            async with httpx.AsyncClient(headers={"User-Agent": "QuietPath/1.0"}, timeout=3.0) as client:
+                res = await client.get(f"https://photon.komoot.io/api/?q={query_clean}&limit=5")
+                if res.status_code == 200:
+                    features = res.json().get("features", [])
+                    results = []
+                    for feat in features:
+                        coords = feat.get("geometry", {}).get("coordinates", [])
+                        props = feat.get("properties", {})
+                        if len(coords) >= 2:
+                            lon, lat = float(coords[0]), float(coords[1])
+                            name = props.get("name") or props.get("street") or query_clean
+                            city = props.get("city") or props.get("state") or props.get("country") or ""
+                            results.append({
+                                "name": name,
+                                "address": f"{name}, {city}".strip(", "),
+                                "lat": lat,
+                                "lng": lon,
+                                "category": props.get("type", "Address / POI").capitalize(),
+                                "sensory_badge": "Global POI",
+                            })
+                    if results:
+                        combined = local_matches + results
+                        _GEO_CACHE[query_clean.lower()] = combined
+                        return combined
+        except Exception:
+            pass
+
         try:
             url = f"https://nominatim.openstreetmap.org/search"
             headers = {"User-Agent": "QuietPath-Sensory-Navigation/1.0 (academic-fyp)"}
             params = {
-                "q": f"{query_clean}, Bengaluru",
+                "q": query_clean,
                 "format": "json",
                 "limit": 4,
                 "addressdetails": 1,
             }
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            async with httpx.AsyncClient(timeout=3.0) as client:
                 res = await client.get(url, params=params, headers=headers)
                 if res.status_code == 200:
                     data = res.json()
@@ -117,8 +146,8 @@ class GeocodingService:
                     for item in data:
                         name = item.get("display_name", "").split(",")[0]
                         address = item.get("display_name", "")
-                        lat = float(item.get("lat", 12.9716))
-                        lon = float(item.get("lon", 77.5946))
+                        lat = float(item.get("lat", 18.5204))
+                        lon = float(item.get("lon", 73.8567))
                         results.append({
                             "name": name,
                             "address": address,

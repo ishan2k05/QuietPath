@@ -7,9 +7,9 @@ router = APIRouter()
 
 @router.get("/live")
 async def get_live_environmental_telemetry(
-    lat: float = Query(12.9716, description="Latitude of location"),
-    lng: float = Query(77.5946, description="Longitude of location"),
-    x_waqi_key: Optional[str] = Header(None, alias="X-WAQI-Key", description="Optional WAQI API Key"),
+    lat: float = Query(12.9716, ge=-90.0, le=90.0, description="Latitude of location (-90 to 90)"),
+    lng: float = Query(77.5946, ge=-180.0, le=180.0, description="Longitude of location (-180 to 180)"),
+    x_waqi_key: Optional[str] = Header(None, alias="X-WAQI-Key", max_length=128, description="Optional WAQI API Key"),
 ):
     """
     Returns real-time environmental sensory telemetry:
@@ -27,9 +27,9 @@ async def get_live_environmental_telemetry(
 
 @router.get("/surroundings")
 async def get_live_surroundings_telemetry(
-    lat: float = Query(12.9716, description="Latitude of location"),
-    lng: float = Query(77.5946, description="Longitude of location"),
-    x_waqi_key: Optional[str] = Header(None, alias="X-WAQI-Key", description="Optional WAQI API Key"),
+    lat: float = Query(12.9716, ge=-90.0, le=90.0, description="Latitude of location (-90 to 90)"),
+    lng: float = Query(77.5946, ge=-180.0, le=180.0, description="Longitude of location (-180 to 180)"),
+    x_waqi_key: Optional[str] = Header(None, alias="X-WAQI-Key", max_length=128, description="Optional WAQI API Key"),
 ):
     """
     Returns real-time environmental sensory telemetry for current location

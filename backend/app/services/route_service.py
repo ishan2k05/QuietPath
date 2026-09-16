@@ -1,10 +1,14 @@
 import math
+import time
 import httpx
 from typing import Optional, List, Dict, Any, Tuple
 from app.algorithms.sensory_scorer import SensoryScorer
 from app.schemas.route import RouteOption, RouteEvaluationResponse
 from app.schemas.sensory_profile import SensoryProfileBase
 from app.services.environmental_service import EnvironmentalService
+
+_OSRM_CACHE: Dict[str, Dict[str, Any]] = {}
+_OSRM_CACHE_TTL_SECONDS = 300
 
 
 KNOWN_PLACES: Dict[str, Tuple[float, float]] = {
@@ -109,7 +113,14 @@ class RouteService:
         dest_lat: float,
         dest_lng: float,
     ) -> List[Dict[str, Any]]:
-        """Queries resilient open-source walking routing network engines."""
+        """Queries resilient open-source walking routing network engines with in-memory caching."""
+        cache_key = f"{round(orig_lat, 4)},{round(orig_lng, 4)}->{round(dest_lat, 4)},{round(dest_lng, 4)}"
+        now = time.time()
+        if cache_key in _OSRM_CACHE:
+            entry = _OSRM_CACHE[cache_key]
+            if now - entry["timestamp"] < _OSRM_CACHE_TTL_SECONDS:
+                return entry["routes"]
+
         endpoints = [
             (
                 f"https://router.project-osrm.org/route/v1/walking/"
@@ -139,6 +150,7 @@ class RouteService:
                         data = res.json()
                         routes = data.get("routes", [])
                         if routes:
+                            _OSRM_CACHE[cache_key] = {"timestamp": now, "routes": routes}
                             return routes
             except Exception:
                 continue

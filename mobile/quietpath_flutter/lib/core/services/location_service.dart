@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -227,6 +226,11 @@ class LocationService {
     activeRouteWaypoints = List<UserCoordinates>.from(waypoints);
   }
 
+  /// Clears active physical road route waypoints.
+  static void clearActiveRouteWaypoints() {
+    activeRouteWaypoints = null;
+  }
+
   /// Pre-computed calm navigation waypoints between Start (Vidhana Soudha) and Golf Club
   static const List<UserCoordinates> calmRouteWaypoints = [
     UserCoordinates(
@@ -391,6 +395,11 @@ class LocationService {
 
   /// Returns calm navigation route waypoints for a specific destination
   static List<UserCoordinates> getWaypointsForDestination(String destination, [UserCoordinates? origin]) {
+    // If destination is empty, return empty list (pure exploratory state)
+    if (destination.trim().isEmpty) {
+      return const [];
+    }
+
     // If active dynamic route waypoints have been set (e.g. from OSRM MCDA route), return them directly!
     if (activeRouteWaypoints != null && activeRouteWaypoints!.length >= 2) {
       return activeRouteWaypoints!;
@@ -691,8 +700,6 @@ class UserLocationNotifier extends StateNotifier<UserCoordinates> {
     AppConfigService().updateLastLocation(fallbackPinpoint.latitude, fallbackPinpoint.longitude);
     await LocalDatabaseService().saveUserLocation(fallbackPinpoint, city: 'Pune');
     return fallbackPinpoint;
-
-    return null;
   }
 
   /// Starts smooth realistic simulated walking along route waypoints.

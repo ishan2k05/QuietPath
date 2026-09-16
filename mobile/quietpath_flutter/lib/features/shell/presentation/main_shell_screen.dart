@@ -6,6 +6,7 @@ import 'package:quietpath_flutter/features/explore/presentation/explore_map_scre
 import 'package:quietpath_flutter/features/safe_spaces/presentation/safe_spaces_screen.dart';
 import 'package:quietpath_flutter/features/profile/presentation/sensory_profile_setup_screen.dart';
 import 'package:quietpath_flutter/features/navigation/services/tts_service.dart';
+import 'package:quietpath_flutter/features/explore/presentation/widgets/voice_search_modal.dart';
 
 class MainShellScreen extends StatefulWidget {
   final int initialTab;
@@ -194,7 +195,87 @@ class _MainShellScreenState extends State<MainShellScreen> {
                   height: 1.4,
                 ),
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 20),
+
+              // Sensory Voice Search Action Card
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFFE8F5E9), Color(0xFFF1F8F1)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFCCE0CB)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(
+                            color: QuietColors.primaryDark,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.mic_rounded, color: Colors.white, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Voice Destination Search',
+                                style: GoogleFonts.inter(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: QuietColors.primaryDark,
+                                ),
+                              ),
+                              Text(
+                                'Speak or tap calm destinations hands-free',
+                                style: GoogleFonts.inter(
+                                  fontSize: 12,
+                                  color: QuietColors.textMuted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () async {
+                          final result = await VoiceSearchModal.show(context);
+                          if (result != null && result.trim().isNotEmpty) {
+                            AppConfigService().setCurrentDestination(result.trim());
+                            setState(() => _currentIndex = 0);
+                          }
+                        },
+                        icon: const Icon(Icons.record_voice_over_rounded, size: 18),
+                        label: Text(
+                          'Start Voice Search Modal',
+                          style: GoogleFonts.inter(fontWeight: FontWeight.w600, fontSize: 13),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: QuietColors.primaryDark,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
 
               // Master Toggle Card
               Container(

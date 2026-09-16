@@ -277,6 +277,8 @@ class _ResilientMapTileState extends State<ResilientMapTile> {
         _cachedFile!,
         key: ValueKey(_cachedFile!.path),
         fit: BoxFit.cover,
+        cacheWidth: 256,
+        cacheHeight: 256,
         errorBuilder: (ctx, err, stack) => _buildNetworkTile(),
       );
     }
@@ -290,18 +292,11 @@ class _ResilientMapTileState extends State<ResilientMapTile> {
       activeUrl,
       key: ValueKey(activeUrl),
       fit: BoxFit.cover,
+      cacheWidth: 256,
+      cacheHeight: 256,
       headers: _browserHeaders,
       loadingBuilder: (ctx, child, progress) {
         if (progress == null) {
-          // Asynchronously persist tile into disk cache for offline access
-          if (widget.providerType != null && widget.z != null && widget.x != null && widget.y != null) {
-            TileCacheService().fetchAndCacheTile(
-              widget.providerType!,
-              widget.z!,
-              widget.x!,
-              widget.y!,
-            );
-          }
           return child;
         }
         return Container(color: const Color(0xFFEFF2EE));

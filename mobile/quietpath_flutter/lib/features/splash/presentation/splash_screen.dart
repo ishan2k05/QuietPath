@@ -2,8 +2,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:quietpath_flutter/core/services/app_config_service.dart';
 import 'package:quietpath_flutter/core/theme/quietpath_theme.dart';
+import 'package:quietpath_flutter/core/widgets/quietpath_logo.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -38,9 +40,24 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     _navigateNext();
   }
 
+  Future<void> _requestInitialPermissions() async {
+    try {
+      await [
+        Permission.location,
+        Permission.microphone,
+      ].request();
+    } catch (e) {
+      debugPrint('[Permissions] Error requesting initial permissions: $e');
+    }
+  }
+
   Future<void> _navigateNext() async {
-    // Give user a brief, calm visual experience (1.6s)
-    await Future.delayed(const Duration(milliseconds: 1600));
+    // Proactively request native Android runtime permissions (GPS & Microphone)
+    // so fresh installations prompt the user immediately like standard Android apps.
+    await _requestInitialPermissions();
+
+    // Give user a brief, calm visual experience (1.4s)
+    await Future.delayed(const Duration(milliseconds: 1400));
     if (!mounted) return;
 
     final hasCompleted = AppConfigService().hasCompletedOnboarding;
@@ -87,11 +104,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                       ],
                     ),
                     child: const Center(
-                      child: Icon(
-                        Icons.eco_rounded,
-                        color: QuietColors.primaryDark,
-                        size: 54,
-                      ),
+                      child: QuietPathLogo(size: 64),
                     ),
                   ),
                   const SizedBox(height: 28),

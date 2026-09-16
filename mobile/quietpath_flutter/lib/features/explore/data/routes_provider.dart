@@ -281,6 +281,12 @@ class RoutesNotifier extends StateNotifier<RoutesState> {
       LocationService.setActiveRouteWaypoints(waypoints);
     }
   }
+
+  /// Clears all routes and active waypoints, returning to empty exploratory state.
+  void clearRoutes() {
+    state = RoutesState(routes: [], selectedRouteId: null, isLoading: false);
+    LocationService.clearActiveRouteWaypoints();
+  }
 }
 
 final routesProvider = StateNotifierProvider<RoutesNotifier, RoutesState>((ref) {

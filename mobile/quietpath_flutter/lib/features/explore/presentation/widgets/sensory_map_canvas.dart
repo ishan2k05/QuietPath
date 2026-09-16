@@ -30,7 +30,7 @@ class SensoryMapCanvas extends StatelessWidget {
   const SensoryMapCanvas({
     super.key,
     required this.isCalmestSelected,
-    this.destinationName = 'Bangalore Golf Club',
+    this.destinationName = '',
     this.hazards = const [],
     this.showSensoryZones = true,
     this.selectedHazardId,
@@ -159,9 +159,11 @@ class _BangaloreMapPainter extends CustomPainter {
     }
   }
 
-  Offset _getDestinationOffset(Size size) {
-    final destCoord = LocationService.destinationCoordinates[destinationName] ??
-        const UserCoordinates(latitude: 12.9860, longitude: 77.5850, label: 'Destination');
+  Offset _getDestinationOffset(Size size, List<UserCoordinates> waypoints) {
+    if (waypoints.isNotEmpty) {
+      return _toScreen(waypoints.last.latitude, waypoints.last.longitude, size);
+    }
+    final destCoord = LocationService.resolveDestinationCoordinates(destinationName);
     return _toScreen(destCoord.latitude, destCoord.longitude, size);
   }
 
@@ -225,57 +227,60 @@ class _BangaloreMapPainter extends CustomPainter {
       canvas.drawPath(roadPath2, roadPaint);
     }
 
-    // Dynamic Start & Destination Points in Geo-Space
-    const startLat = 12.9716;
-    const startLng = 77.5946;
-    final startOffset = _toScreen(startLat, startLng, size);
-    final destOffset = _getDestinationOffset(size);
+    // Dynamic Waypoints from Active Route Engine
+    final waypoints = destinationName.trim().isNotEmpty
+        ? LocationService.getWaypointsForDestination(destinationName)
+        : const <UserCoordinates>[];
+    final destOffset = waypoints.isNotEmpty
+        ? _getDestinationOffset(size, waypoints)
+        : Offset.zero;
 
-    final waypoints = LocationService.getWaypointsForDestination(destinationName);
+    if (destinationName.trim().isNotEmpty && waypoints.length >= 2) {
+      final startPos = _toScreen(waypoints.first.latitude, waypoints.first.longitude, size);
+      final destPos = _toScreen(waypoints.last.latitude, waypoints.last.longitude, size);
 
-    // 4. Draw Route 2 (Quickest Route - via commercial corridor)
-    final fastRoutePaint = Paint()
-      ..color = isCalmestSelected
-          ? const Color(0xFFD89D8B).withValues(alpha: 0.35)
-          : const Color(0xFFC95B42)
-      ..strokeWidth = isCalmestSelected ? 4 : 7
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+      // 4. Draw Route 2 (Quickest Route - alternative curve if using synthetic routes)
+      if (waypoints.length <= 4) {
+        final fastRoutePaint = Paint()
+          ..color = isCalmestSelected
+              ? const Color(0xFFD89D8B).withValues(alpha: 0.35)
+              : const Color(0xFFC95B42)
+          ..strokeWidth = isCalmestSelected ? 4 : 7
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round;
 
-    final destCoord = LocationService.destinationCoordinates[destinationName] ??
-        const UserCoordinates(latitude: 12.9860, longitude: 77.5850, label: 'Destination');
-    final midFast = _toScreen(
-      (startLat + destCoord.latitude) / 2 + 0.003,
-      (startLng + destCoord.longitude) / 2 + 0.005,
-      size,
-    );
+        final midFast = _toScreen(
+          (waypoints.first.latitude + waypoints.last.latitude) / 2 + 0.003,
+          (waypoints.first.longitude + waypoints.last.longitude) / 2 + 0.005,
+          size,
+        );
 
-    final fastPath = Path()
-      ..moveTo(startOffset.dx, startOffset.dy)
-      ..quadraticBezierTo(
-        midFast.dx,
-        midFast.dy,
-        destOffset.dx,
-        destOffset.dy,
-      );
-    canvas.drawPath(fastPath, fastRoutePaint);
+        final fastPath = Path()
+          ..moveTo(startPos.dx, startPos.dy)
+          ..quadraticBezierTo(
+            midFast.dx,
+            midFast.dy,
+            destPos.dx,
+            destPos.dy,
+          );
+        canvas.drawPath(fastPath, fastRoutePaint);
+      }
 
-    // 5. Draw Route 1 (Calmest Route - geo-anchored along peaceful park & shaded corridors)
-    final calmRoutePaint = Paint()
-      ..color = isCalmestSelected ? QuietColors.primaryDark : QuietColors.primary.withValues(alpha: 0.4)
-      ..strokeWidth = isCalmestSelected ? 7 : 4
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round;
+      // 5. Draw Route 1 (Calmest Route - strictly following waypoints from origin to destination)
+      final calmRoutePaint = Paint()
+        ..color = isCalmestSelected ? QuietColors.primaryDark : QuietColors.primary.withValues(alpha: 0.4)
+        ..strokeWidth = isCalmestSelected ? 7 : 4
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round;
 
-    final calmPath = Path()..moveTo(startOffset.dx, startOffset.dy);
-    for (int i = 1; i < waypoints.length; i++) {
-      final wpOffset = _toScreen(waypoints[i].latitude, waypoints[i].longitude, size);
-      calmPath.lineTo(wpOffset.dx, wpOffset.dy);
+      final calmPath = Path()..moveTo(startPos.dx, startPos.dy);
+      for (int i = 1; i < waypoints.length; i++) {
+        final wpOffset = _toScreen(waypoints[i].latitude, waypoints[i].longitude, size);
+        calmPath.lineTo(wpOffset.dx, wpOffset.dy);
+      }
+      canvas.drawPath(calmPath, calmRoutePaint);
     }
-    // Connect final waypoint to destination if not identical
-    calmPath.lineTo(destOffset.dx, destOffset.dy);
-    canvas.drawPath(calmPath, calmRoutePaint);
 
     // 6. User Location (Live Hardware GPS or Simulated walking position)
     final Offset userPos;
@@ -284,8 +289,10 @@ class _BangaloreMapPainter extends CustomPainter {
     } else if (userStepIndex != null && waypoints.isNotEmpty) {
       final idx = userStepIndex!.clamp(0, waypoints.length - 1);
       userPos = _toScreen(waypoints[idx].latitude, waypoints[idx].longitude, size);
+    } else if (waypoints.isNotEmpty) {
+      userPos = _toScreen(waypoints.first.latitude, waypoints.first.longitude, size);
     } else {
-      userPos = startOffset;
+      userPos = _toScreen(cameraLat, cameraLng, size);
     }
 
     // Directional Compass Heading Beam
@@ -344,15 +351,17 @@ class _BangaloreMapPainter extends CustomPainter {
       canvas.drawCircle(userPos, 3, Paint()..color = Colors.white);
     }
 
-    // 7. Destination Pin
-    final destHalo = Paint()
-      ..color = const Color(0xFF2B2D2F).withValues(alpha: 0.15)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(destOffset, 15, destHalo);
+    // 7. Destination Pin (only rendered when an active destination is selected)
+    if (destinationName.trim().isNotEmpty && waypoints.isNotEmpty) {
+      final destHalo = Paint()
+        ..color = const Color(0xFF2B2D2F).withValues(alpha: 0.15)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(destOffset, 15, destHalo);
 
-    final destPaint = Paint()..color = const Color(0xFF2B2D2F);
-    canvas.drawCircle(destOffset, 7, destPaint);
-    canvas.drawCircle(destOffset, 3, Paint()..color = Colors.white);
+      final destPaint = Paint()..color = const Color(0xFF2B2D2F);
+      canvas.drawCircle(destOffset, 7, destPaint);
+      canvas.drawCircle(destOffset, 3, Paint()..color = Colors.white);
+    }
 
     // 8. Surrounding Micro-Climate Telemetry Badges (Parks, Water, Corridors)
     if (surroundingZones != null && hasTileLayer) {
@@ -418,6 +427,13 @@ class _BangaloreMapPainter extends CustomPainter {
 
   void _drawHazardMarker(Canvas canvas, Size size, HazardData hazard) {
     final offset = _toScreen(hazard.lat, hazard.lng, size);
+
+    // Viewport culling: skip drawing pins that are completely outside the visible screen
+    if (offset.dx < -30 || offset.dx > size.width + 30 ||
+        offset.dy < -30 || offset.dy > size.height + 30) {
+      return;
+    }
+
     final color = hazard.tagColor;
     final isSelected = hazard.id == selectedHazardId;
 
@@ -500,7 +516,14 @@ class _BangaloreMapPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _BangaloreMapPainter oldDelegate) {
-    return oldDelegate.isCalmestSelected != isCalmestSelected ||
+    // Deadband filter for compass heading (1.0 degree threshold prevents micro-jitter repainting)
+    final headingDiff = (oldDelegate.heading != null && heading != null)
+        ? (oldDelegate.heading! - heading!).abs()
+        : 0.0;
+    final headingChanged = (oldDelegate.heading == null) != (heading == null) || headingDiff >= 1.0;
+
+    return headingChanged ||
+        oldDelegate.isCalmestSelected != isCalmestSelected ||
         oldDelegate.destinationName != destinationName ||
         oldDelegate.hazards != hazards ||
         oldDelegate.showSensoryZones != showSensoryZones ||

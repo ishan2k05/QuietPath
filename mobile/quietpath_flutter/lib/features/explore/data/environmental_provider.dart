@@ -169,10 +169,35 @@ class SurroundingsTelemetry {
   );
 }
 
+double? _lastEnvLat;
+double? _lastEnvLng;
+DateTime? _lastEnvTime;
+EnvironmentalTelemetry? _cachedTelemetry;
+
+double? _lastSurroundLat;
+double? _lastSurroundLng;
+DateTime? _lastSurroundTime;
+SurroundingsTelemetry? _cachedSurroundings;
+
 final environmentalTelemetryProvider = FutureProvider<EnvironmentalTelemetry>((
   ref,
 ) async {
   final userLoc = ref.watch(userLocationProvider);
+
+  // Spatial-temporal cache: skip network fetch if user moved < 200m and last fetch was within 5 minutes
+  if (_lastEnvLat != null && _lastEnvLng != null && _lastEnvTime != null && _cachedTelemetry != null) {
+    final dist = LocationService.calculateDistanceMeters(
+      userLoc.latitude,
+      userLoc.longitude,
+      _lastEnvLat!,
+      _lastEnvLng!,
+    );
+    final age = DateTime.now().difference(_lastEnvTime!);
+    if (dist < 200.0 && age.inMinutes < 5) {
+      return _cachedTelemetry!;
+    }
+  }
+
   try {
     final dio = ApiClient().dio;
     final res = await dio.get(
@@ -180,18 +205,38 @@ final environmentalTelemetryProvider = FutureProvider<EnvironmentalTelemetry>((
       queryParameters: {'lat': userLoc.latitude, 'lng': userLoc.longitude},
     );
     if (res.statusCode == 200 && res.data is Map<String, dynamic>) {
-      return EnvironmentalTelemetry.fromJson(res.data as Map<String, dynamic>);
+      final parsed = EnvironmentalTelemetry.fromJson(res.data as Map<String, dynamic>);
+      _cachedTelemetry = parsed;
+      _lastEnvLat = userLoc.latitude;
+      _lastEnvLng = userLoc.longitude;
+      _lastEnvTime = DateTime.now();
+      return parsed;
     }
   } catch (_) {
     // Graceful offline fallback
   }
-  return EnvironmentalTelemetry.defaultTelemetry;
+  return _cachedTelemetry ?? EnvironmentalTelemetry.defaultTelemetry;
 });
 
 final surroundingsTelemetryProvider = FutureProvider<SurroundingsTelemetry>((
   ref,
 ) async {
   final userLoc = ref.watch(userLocationProvider);
+
+  // Spatial-temporal cache: skip network fetch if user moved < 200m and last fetch was within 5 minutes
+  if (_lastSurroundLat != null && _lastSurroundLng != null && _lastSurroundTime != null && _cachedSurroundings != null) {
+    final dist = LocationService.calculateDistanceMeters(
+      userLoc.latitude,
+      userLoc.longitude,
+      _lastSurroundLat!,
+      _lastSurroundLng!,
+    );
+    final age = DateTime.now().difference(_lastSurroundTime!);
+    if (dist < 200.0 && age.inMinutes < 5) {
+      return _cachedSurroundings!;
+    }
+  }
+
   try {
     final dio = ApiClient().dio;
     final res = await dio.get(
@@ -201,13 +246,18 @@ final surroundingsTelemetryProvider = FutureProvider<SurroundingsTelemetry>((
     if (res.statusCode == 200 && res.data is Map<String, dynamic>) {
       final curData = res.data['current'] as Map<String, dynamic>? ?? {};
       final rawZones = res.data['surrounding_zones'] as List<dynamic>? ?? [];
-      return SurroundingsTelemetry(
+      final parsed = SurroundingsTelemetry(
         current: EnvironmentalTelemetry.fromJson(curData),
         zones: rawZones.map((z) => SurroundingZone.fromJson(z as Map<String, dynamic>)).toList(),
       );
+      _cachedSurroundings = parsed;
+      _lastSurroundLat = userLoc.latitude;
+      _lastSurroundLng = userLoc.longitude;
+      _lastSurroundTime = DateTime.now();
+      return parsed;
     }
   } catch (_) {
     // Graceful offline fallback
   }
-  return SurroundingsTelemetry.defaultSurroundings;
+  return _cachedSurroundings ?? SurroundingsTelemetry.defaultSurroundings;
 });

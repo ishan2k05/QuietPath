@@ -9,12 +9,32 @@ import 'package:quietpath_flutter/features/safe_spaces/presentation/safe_spaces_
 import 'package:quietpath_flutter/features/navigation/presentation/active_navigation_screen.dart';
 import 'package:quietpath_flutter/features/splash/presentation/splash_screen.dart';
 
+import 'package:flutter/services.dart';
 import 'package:quietpath_flutter/core/services/local_database_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await AppConfigService().init();
   await LocalDatabaseService().init();
+
+  // Immersive Sticky Mode: hides the 3 bottom Android system navigation buttons so they don't overlay
+  // the app screen, collapsing them into transient swipe-up mode while preserving the top status bar.
+  await SystemChrome.setEnabledSystemUIMode(
+    SystemUiMode.immersiveSticky,
+    overlays: [SystemUiOverlay.top],
+  );
+
+  // Set system UI style so status bar icons look crisp and navigation bar is fully transparent
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    ),
+  );
+
   runApp(const ProviderScope(child: QuietPathApp()));
 }
 

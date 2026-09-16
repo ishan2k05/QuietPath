@@ -15,6 +15,8 @@ import 'package:quietpath_flutter/features/explore/data/routes_provider.dart';
 import 'package:quietpath_flutter/features/explore/presentation/widgets/sensory_map_canvas.dart';
 import 'package:quietpath_flutter/features/explore/presentation/widgets/sensory_tile_layer.dart';
 import 'package:quietpath_flutter/features/navigation/services/tts_service.dart';
+import 'package:quietpath_flutter/core/widgets/quietpath_logo.dart';
+import 'package:quietpath_flutter/features/explore/presentation/widgets/voice_search_modal.dart';
 
 class ExploreMapScreen extends ConsumerStatefulWidget {
   const ExploreMapScreen({super.key});
@@ -24,7 +26,7 @@ class ExploreMapScreen extends ConsumerStatefulWidget {
 }
 
 class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
-  String _currentDestination = 'Bangalore Golf Club';
+  String? _currentDestination;
   final TransformationController _transformationController = TransformationController();
   MapDisplayMode _mapDisplayMode = MapDisplayMode.googleMaps;
   bool _showSensoryZones = true;
@@ -42,7 +44,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
     final cfg = AppConfigService();
     _mapDisplayMode = cfg.mapDisplayMode;
     _showSensoryZones = cfg.showSensoryCanopy;
-    _currentDestination = cfg.currentDestination;
+    _currentDestination = null; // Always start in clean empty state upon open/reopen
 
     // Detect user's real physical/network location upon launch (e.g. Pune)
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -55,21 +57,8 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
           _cameraLng = loc.longitude;
         });
 
-        // If user is in/near Pune and current destination is default Bangalore Golf Club, switch to local calm destination
-        final distToPune = LocationService.calculateDistanceMeters(loc.latitude, loc.longitude, 18.5204, 73.8567);
-        if (distToPune < 250000 && _currentDestination == 'Bangalore Golf Club') {
-          setState(() {
-            _currentDestination = 'Osho Teerth Park';
-          });
-          AppConfigService().setCurrentDestination('Osho Teerth Park');
-        }
-
-        // Fetch real-time OSRM & MCDA sensory routes from user's actual location
-        ref.read(routesProvider.notifier).fetchRoutes(
-          destName: _currentDestination,
-          originLat: loc.latitude,
-          originLng: loc.longitude,
-        );
+        // Ensure routes are clear on launch (pure exploratory mode)
+        ref.read(routesProvider.notifier).clearRoutes();
       }
     });
   }
@@ -150,7 +139,58 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
     );
   }
 
+  void _selectAndNavigate(String destName, [double? lat, double? lng, String? label]) {
+    if (lat != null && lng != null) {
+      LocationService.registerDestination(destName, lat, lng, label);
+    }
+    final coord = LocationService.destinationCoordinates[destName];
+    setState(() {
+      _currentDestination = destName;
+      if (coord != null) {
+        final userLoc = ref.read(userLocationProvider);
+        _cameraLat = (userLoc.latitude + coord.latitude) / 2;
+        _cameraLng = (userLoc.longitude + coord.longitude) / 2;
+        _cameraZoom = 14.0;
+      }
+    });
+    AppConfigService().setCurrentDestination(destName);
+    ref.read(routesProvider.notifier).fetchRoutes(
+      destName: destName,
+      destLat: coord?.latitude,
+      destLng: coord?.longitude,
+    );
+    TtsService().speakCalm('Destination set to $destName. Calculating calm route.');
+  }
 
+  void _clearDestination() {
+    setState(() {
+      _currentDestination = null;
+      _isRouteSheetExpanded = false;
+    });
+    AppConfigService().setCurrentDestination('');
+    ref.read(routesProvider.notifier).clearRoutes();
+    LocationService.clearActiveRouteWaypoints();
+    TtsService().speakCalm('Route cleared. Exploring calm surroundings.');
+  }
+
+  Future<void> _openVoiceSearch() async {
+    final result = await VoiceSearchModal.show(context);
+    if (result != null && result.trim().isNotEmpty) {
+      final query = result.trim();
+      final userLocation = ref.read(userLocationProvider);
+      final results = await GeocodingService().searchPlaces(
+        query,
+        userLat: userLocation.latitude,
+        userLng: userLocation.longitude,
+      );
+      if (results.isNotEmpty) {
+        final top = results.first;
+        _selectAndNavigate(top.name, top.latitude, top.longitude, top.formattedAddress);
+      } else {
+        _selectAndNavigate(query);
+      }
+    }
+  }
 
   void _openSearchSheet() {
     final userLocation = ref.read(userLocationProvider);
@@ -174,27 +214,8 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
         );
 
         void selectAndNavigate(String destName, [double? lat, double? lng, String? label]) {
-          if (lat != null && lng != null) {
-            LocationService.registerDestination(destName, lat, lng, label);
-          }
-          final coord = LocationService.destinationCoordinates[destName];
-          setState(() {
-            _currentDestination = destName;
-            if (coord != null) {
-              final userLoc = ref.read(userLocationProvider);
-              _cameraLat = (userLoc.latitude + coord.latitude) / 2;
-              _cameraLng = (userLoc.longitude + coord.longitude) / 2;
-              _cameraZoom = 14.0;
-            }
-          });
-          AppConfigService().setCurrentDestination(destName);
-          ref.read(routesProvider.notifier).fetchRoutes(
-            destName: destName,
-            destLat: coord?.latitude,
-            destLng: coord?.longitude,
-          );
-          TtsService().speakCalm('Destination set to $destName. Calculating calm route.');
           Navigator.pop(ctx);
+          _selectAndNavigate(destName, lat, lng, label);
         }
 
         return StatefulBuilder(
@@ -312,8 +333,11 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                                 ),
                               )
                             : const Icon(Icons.search_rounded, color: QuietColors.primaryDark, size: 20),
-                        suffixIcon: searchQuery.isNotEmpty
-                            ? IconButton(
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (searchQuery.isNotEmpty)
+                              IconButton(
                                 icon: const Icon(Icons.clear_rounded, size: 18, color: QuietColors.textMuted),
                                 onPressed: () {
                                   searchController.clear();
@@ -327,8 +351,17 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                                     );
                                   });
                                 },
-                              )
-                            : null,
+                              ),
+                            IconButton(
+                              icon: const Icon(Icons.mic_rounded, size: 20, color: QuietColors.primaryDark),
+                              tooltip: 'Sensory Voice Search',
+                              onPressed: () {
+                                Navigator.pop(ctx);
+                                _openVoiceSearch();
+                              },
+                            ),
+                          ],
+                        ),
                         border: InputBorder.none,
                         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                       ),
@@ -834,30 +867,40 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                       ),
                       onPressed: () async {
                         Navigator.pop(ctx);
-                        await ref.read(hazardsProvider.notifier).reportHazard(
+                        final trimmedTitle = titleController.text.trim();
+                        final sanitizedTitle = trimmedTitle.length >= 3
+                            ? (trimmedTitle.length <= 120 ? trimmedTitle : trimmedTitle.substring(0, 120))
+                            : 'Sensory Disruption';
+                        final userLoc = ref.read(userLocationProvider);
+
+                        final success = await ref.read(hazardsProvider.notifier).reportHazard(
                           hazardType: selectedType,
-                          title: titleController.text.trim().isNotEmpty
-                              ? titleController.text.trim()
-                              : 'Sensory Hazard',
+                          title: sanitizedTitle,
                           description: descController.text.trim(),
                           severity: severity.toInt(),
-                          lat: 12.9755,
-                          lng: 77.5925,
+                          lat: userLoc.latitude,
+                          lng: userLoc.longitude,
                         );
 
                         if (mounted) {
+                          final hState = ref.read(hazardsProvider);
+                          final msg = success
+                              ? (hState.successMessage ?? 'Hazard reported! Real-time routes updated.')
+                              : (hState.errorMessage ?? 'Unable to record hazard at this time.');
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              backgroundColor: QuietColors.primaryDark,
+                              backgroundColor: success ? QuietColors.primaryDark : QuietColors.alertRed,
                               content: Text(
-                                'Hazard reported! Real-time routes updated to avoid stimulus.',
+                                msg,
                                 style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
                               ),
                               behavior: SnackBarBehavior.floating,
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                             ),
                           );
-                          ref.read(routesProvider.notifier).fetchRoutes();
+                          if (success) {
+                            ref.read(routesProvider.notifier).fetchRoutes();
+                          }
                         }
                       },
                       child: Text(
@@ -1266,7 +1309,6 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
     final routesState = ref.watch(routesProvider);
     final hazardsState = ref.watch(hazardsProvider);
     final userLocation = ref.watch(userLocationProvider);
-    final compassHeading = ref.watch(compassHeadingProvider);
     final isCalmestSelected =
         routesState.selectedRouteId == 'route_calmest' || routesState.selectedRouteId == null;
 
@@ -1419,24 +1461,29 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
 
                         // Interactive Sensory Vector Canvas with Geo-Anchored Routes
                         Positioned.fill(
-                          child: SensoryMapCanvas(
-                            isCalmestSelected: isCalmestSelected,
-                            destinationName: _currentDestination,
-                            hazards: hazardsState.hazards,
-                            showSensoryZones: _showSensoryZones,
-                            selectedHazardId: _selectedHazardId,
-                            width: constraints.maxWidth,
-                            height: constraints.maxHeight,
-                            hasTileLayer: hasTiles,
-                            isHardwareGps: userLocation.isHardwareGps,
-                            userLat: userLocation.latitude,
-                            userLng: userLocation.longitude,
-                            accuracy: userLocation.accuracy,
-                            heading: compassHeading,
-                            cameraLat: _cameraLat,
-                            cameraLng: _cameraLng,
-                            zoom: _cameraZoom,
-                            surroundingZones: surroundingsAsync.value?.zones,
+                          child: Consumer(
+                            builder: (context, ref, _) {
+                              final compassHeading = ref.watch(compassHeadingProvider);
+                              return SensoryMapCanvas(
+                                isCalmestSelected: isCalmestSelected,
+                                destinationName: _currentDestination ?? '',
+                                hazards: hazardsState.hazards,
+                                showSensoryZones: _showSensoryZones,
+                                selectedHazardId: _selectedHazardId,
+                                width: constraints.maxWidth,
+                                height: constraints.maxHeight,
+                                hasTileLayer: hasTiles,
+                                isHardwareGps: userLocation.isHardwareGps,
+                                userLat: userLocation.latitude,
+                                userLng: userLocation.longitude,
+                                accuracy: userLocation.accuracy,
+                                heading: compassHeading,
+                                cameraLat: _cameraLat,
+                                cameraLng: _cameraLng,
+                                zoom: _cameraZoom,
+                                surroundingZones: surroundingsAsync.value?.zones,
+                              );
+                            },
                           ),
                         ),
 
@@ -1513,17 +1560,26 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                   isActive: _mapDisplayMode == MapDisplayMode.streetTiles,
                   onTap: _toggleTileCanvasMode,
                 ),
-                if (compassHeading != null) ...[
-                  const SizedBox(height: 8),
-                  _buildMapActionButton(
-                    icon: Icons.navigation_rounded,
-                    tooltip: 'Compass: ${compassHeading.round()}° (Tap to calibrate)',
-                    iconRotation: compassHeading * (math.pi / 180.0),
-                    onTap: () {
-                      ref.read(compassHeadingProvider.notifier).setHeading(0.0);
-                    },
-                  ),
-                ],
+                Consumer(
+                  builder: (context, ref, _) {
+                    final compassHeading = ref.watch(compassHeadingProvider);
+                    if (compassHeading == null) return const SizedBox.shrink();
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(height: 8),
+                        _buildMapActionButton(
+                          icon: Icons.navigation_rounded,
+                          tooltip: 'Compass: ${compassHeading.round()}° (Tap to calibrate)',
+                          iconRotation: compassHeading * (math.pi / 180.0),
+                          onTap: () {
+                            ref.read(compassHeadingProvider.notifier).setHeading(0.0);
+                          },
+                        ),
+                      ],
+                    );
+                  },
+                ),
               ],
             ),
           ),
@@ -1565,7 +1621,7 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Icon(Icons.eco_rounded, color: QuietColors.primaryDark, size: 22),
+                          const QuietPathLogo(size: 22),
                           const SizedBox(width: 8),
                           Text(
                             'QuietPath',
@@ -1598,38 +1654,77 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Floating Search Pill
-                GestureDetector(
-                  onTap: _openSearchSheet,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(28),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.08),
-                          blurRadius: 10,
-                          offset: const Offset(0, 3),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(28),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: _openSearchSheet,
+                        behavior: HitTestBehavior.opaque,
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.search_rounded, color: QuietColors.textMuted, size: 22),
+                            SizedBox(width: 10),
+                          ],
                         ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.search_rounded, color: QuietColors.textMuted, size: 22),
-                        const SizedBox(width: 10),
-                        Expanded(
+                      ),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: _openSearchSheet,
+                          behavior: HitTestBehavior.opaque,
                           child: Text(
-                            _currentDestination,
+                            (_currentDestination != null && _currentDestination!.trim().isNotEmpty)
+                                ? _currentDestination!
+                                : 'Where would you like to go calmly?',
                             style: GoogleFonts.inter(
-                              fontSize: 15,
-                              color: QuietColors.textCharcoal,
-                              fontWeight: FontWeight.w600,
+                              fontSize: 14.5,
+                              color: (_currentDestination != null && _currentDestination!.trim().isNotEmpty)
+                                  ? QuietColors.textCharcoal
+                                  : QuietColors.textMuted,
+                              fontWeight: (_currentDestination != null && _currentDestination!.trim().isNotEmpty)
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        const Icon(Icons.near_me_rounded, color: QuietColors.primaryDark, size: 20),
-                      ],
-                    ),
+                      ),
+                      if (_currentDestination != null && _currentDestination!.trim().isNotEmpty)
+                        GestureDetector(
+                          onTap: _clearDestination,
+                          behavior: HitTestBehavior.opaque,
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                            child: Icon(Icons.close_rounded, color: QuietColors.textMuted, size: 20),
+                          ),
+                        ),
+                      GestureDetector(
+                        onTap: _openVoiceSearch,
+                        behavior: HitTestBehavior.opaque,
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          child: Icon(Icons.mic_rounded, color: QuietColors.primaryDark, size: 21),
+                        ),
+                      ),
+                      GestureDetector(
+                        onTap: _openSearchSheet,
+                        behavior: HitTestBehavior.opaque,
+                        child: const Icon(Icons.near_me_rounded, color: QuietColors.primaryDark, size: 20),
+                      ),
+                    ],
                   ),
                 ),
 
@@ -1804,226 +1899,228 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
             ),
           ),
 
-          // 4. Collapsible Bottom Route Overlay (Peek mode leaves map open)
+          // 4. Collapsible Bottom Route Overlay OR Exploratory Sanctuary Bar
           Positioned(
             left: 16,
             right: 16,
             bottom: 16,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              curve: Curves.easeOutCubic,
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.96),
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.08),
-                    blurRadius: 14,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!_isRouteSheetExpanded) ...[
-                    // Compact Peek Mode
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: (_currentDestination != null && _currentDestination!.trim().isNotEmpty)
+                ? AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOutCubic,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.96),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.08),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Expanded(
-                          child: Row(
+                        if (!_isRouteSheetExpanded) ...[
+                          // Compact Peek Mode
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: isCalmestSelected
-                                      ? QuietColors.primaryLight
-                                      : const Color(0xFFF1F3F5),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Icon(
-                                  Icons.near_me_rounded,
-                                  size: 18,
-                                  color: isCalmestSelected
-                                      ? QuietColors.primaryDark
-                                      : QuietColors.textCharcoal,
-                                ),
-                              ),
-                              const SizedBox(width: 10),
                               Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
+                                child: Row(
                                   children: [
-                                    Text(
-                                      _currentDestination,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: GoogleFonts.inter(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w700,
-                                        color: QuietColors.textCharcoal,
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: isCalmestSelected
+                                            ? QuietColors.primaryLight
+                                            : const Color(0xFFF1F3F5),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        Icons.near_me_rounded,
+                                        size: 18,
+                                        color: isCalmestSelected
+                                            ? QuietColors.primaryDark
+                                            : QuietColors.textCharcoal,
                                       ),
                                     ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      isCalmestSelected
-                                          ? '${calmRoute.name} • ${calmRoute.durationMinutes}m (${calmRoute.distanceKm.toStringAsFixed(1)} km)'
-                                          : '${fastRoute.name} • ${fastRoute.durationMinutes}m (${fastRoute.distanceKm.toStringAsFixed(1)} km)',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: GoogleFonts.inter(
-                                        fontSize: 12,
-                                        color: QuietColors.textMuted,
-                                        fontWeight: FontWeight.w500,
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Text(
+                                            _currentDestination ?? '',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.inter(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w700,
+                                              color: QuietColors.textCharcoal,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            isCalmestSelected
+                                                ? '${calmRoute.name} • ${calmRoute.durationMinutes}m (${calmRoute.distanceKm.toStringAsFixed(1)} km)'
+                                                : '${fastRoute.name} • ${fastRoute.durationMinutes}m (${fastRoute.distanceKm.toStringAsFixed(1)} km)',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.inter(
+                                              fontSize: 12,
+                                              color: QuietColors.textMuted,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
                                 ),
                               ),
+                              const SizedBox(width: 8),
+                              InkWell(
+                                onTap: () => setState(() => _isRouteSheetExpanded = true),
+                                borderRadius: BorderRadius.circular(12),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF1F3F5),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        'Compare (${routesState.routes.isNotEmpty ? routesState.routes.length : 2})',
+                                        style: GoogleFonts.inter(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: QuietColors.textCharcoal,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 2),
+                                      const Icon(Icons.keyboard_arrow_up_rounded, size: 16, color: QuietColors.textCharcoal),
+                                    ],
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        InkWell(
-                          onTap: () => setState(() => _isRouteSheetExpanded = true),
-                          borderRadius: BorderRadius.circular(12),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(
-                               color: const Color(0xFFF1F3F5),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  'Compare (${routesState.routes.isNotEmpty ? routesState.routes.length : 2})',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                    color: QuietColors.textCharcoal,
+                        ] else ...[
+                          // Expanded Comparison Mode
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Route Comparison',
+                                style: GoogleFonts.inter(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: QuietColors.textCharcoal,
+                                ),
+                              ),
+                              InkWell(
+                                onTap: () => setState(() => _isRouteSheetExpanded = false),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(4.0),
+                                  child: Row(
+                                    children: [
+                                      Text(
+                                        'Collapse',
+                                        style: GoogleFonts.inter(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w600,
+                                          color: QuietColors.textMuted,
+                                        ),
+                                      ),
+                                      const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: QuietColors.textMuted),
+                                    ],
                                   ),
                                 ),
-                                const SizedBox(width: 2),
-                                const Icon(Icons.keyboard_arrow_up_rounded, size: 16, color: QuietColors.textCharcoal),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
-                  ] else ...[
-                    // Expanded Comparison Mode
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Route Comparison',
-                          style: GoogleFonts.inter(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: QuietColors.textCharcoal,
+                          const SizedBox(height: 10),
+                          // Card 1: Calmest Route
+                          _buildRouteCard(
+                            context: context,
+                            isRecommended: true,
+                            isSelected: isCalmestSelected,
+                            title: calmRoute.name,
+                            duration: '${calmRoute.durationMinutes} mins',
+                            sublabel: '${calmRoute.distanceKm.toStringAsFixed(1)} km',
+                            score: '${calmRoute.sensoryScore.round()}',
+                            onTap: () => ref.read(routesProvider.notifier).selectRoute(calmRoute.id),
+                            onExplain: () => _showExplainabilitySheet(context, calmRoute),
                           ),
-                        ),
-                        InkWell(
-                          onTap: () => setState(() => _isRouteSheetExpanded = false),
-                          child: Padding(
-                            padding: const EdgeInsets.all(4.0),
-                            child: Row(
-                              children: [
-                                Text(
-                                  'Collapse',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                    color: QuietColors.textMuted,
-                                  ),
-                                ),
-                                const Icon(Icons.keyboard_arrow_down_rounded, size: 18, color: QuietColors.textMuted),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    // Card 1: Calmest Route
-                    _buildRouteCard(
-                      context: context,
-                      isRecommended: true,
-                      isSelected: isCalmestSelected,
-                      title: calmRoute.name,
-                      duration: '${calmRoute.durationMinutes} mins',
-                      sublabel: '${calmRoute.distanceKm.toStringAsFixed(1)} km',
-                      score: '${calmRoute.sensoryScore.round()}',
-                      onTap: () => ref.read(routesProvider.notifier).selectRoute(calmRoute.id),
-                      onExplain: () => _showExplainabilitySheet(context, calmRoute),
-                    ),
-                    const SizedBox(height: 8),
+                          const SizedBox(height: 8),
 
-                    // Card 2: Quickest Route
-                    _buildRouteCard(
-                      context: context,
-                      isRecommended: false,
-                      isSelected: !isCalmestSelected,
-                      title: fastRoute.name,
-                      duration: '${fastRoute.durationMinutes} mins',
-                      sublabel: '${fastRoute.distanceKm.toStringAsFixed(1)} km',
-                      score: '${fastRoute.sensoryScore.round()}',
-                      onTap: () => ref.read(routesProvider.notifier).selectRoute(fastRoute.id),
-                      onExplain: () => _showExplainabilitySheet(context, fastRoute),
-                    ),
-                  ],
-
-                  const SizedBox(height: 10),
-
-                  // Start Navigation Button
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: QuietColors.primaryDark,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-                        alignment: Alignment.center,
-                      ),
-                      onPressed: () {
-                        final chosenRoute = isCalmestSelected ? calmRoute : fastRoute;
-                        TtsService().speakCalm('Starting navigation to $_currentDestination via ${chosenRoute.name}.');
-                        context.push(
-                          '/navigation',
-                          extra: {'destination': _currentDestination},
-                        );
-                      },
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Text(
-                            'Start Navigation',
-                            style: GoogleFonts.inter(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                              height: 1.2,
-                            ),
+                          // Card 2: Quickest Route
+                          _buildRouteCard(
+                            context: context,
+                            isRecommended: false,
+                            isSelected: !isCalmestSelected,
+                            title: fastRoute.name,
+                            duration: '${fastRoute.durationMinutes} mins',
+                            sublabel: '${fastRoute.distanceKm.toStringAsFixed(1)} km',
+                            score: '${fastRoute.sensoryScore.round()}',
+                            onTap: () => ref.read(routesProvider.notifier).selectRoute(fastRoute.id),
+                            onExplain: () => _showExplainabilitySheet(context, fastRoute),
                           ),
-                          const SizedBox(width: 8),
-                          const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
                         ],
-                      ),
+
+                        const SizedBox(height: 10),
+
+                        // Start Navigation Button
+                        SizedBox(
+                          width: double.infinity,
+                          height: 52,
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: QuietColors.primaryDark,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              elevation: 0,
+                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                              alignment: Alignment.center,
+                            ),
+                            onPressed: () {
+                              final chosenRoute = isCalmestSelected ? calmRoute : fastRoute;
+                              TtsService().speakCalm('Starting navigation to ${_currentDestination ?? 'Destination'} via ${chosenRoute.name}.');
+                              context.push(
+                                '/navigation',
+                                extra: {'destination': _currentDestination},
+                              );
+                            },
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'Start Navigation',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                    height: 1.2,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 18),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
-            ),
+                  )
+                : _buildExploratorySanctuaryBar(),
           ),
         ],
       ),
@@ -2074,6 +2171,118 @@ class _ExploreMapScreenState extends ConsumerState<ExploreMapScreen> {
     );
   }
 
+  Widget _buildExploratorySanctuaryBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.96),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 14,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: const BoxDecoration(
+                  color: QuietColors.primaryLight,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.spa_rounded, size: 16, color: QuietColors.primaryDark),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Sensory Calm Mode Active',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: QuietColors.textCharcoal,
+                      ),
+                    ),
+                    Text(
+                      'Tap a sanctuary below or search any place to route',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: QuietColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              InkWell(
+                onTap: _openSearchSheet,
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF1F4F1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'Browse',
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: QuietColors.primaryDark,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildQuickExploreChip('🌿 Empress Botanical', 'Empress Botanical Garden'),
+                const SizedBox(width: 8),
+                _buildQuickExploreChip('🧘 Osho Teerth', 'Osho Teerth Park'),
+                const SizedBox(width: 8),
+                _buildQuickExploreChip('🏛️ Quiet Library', 'State Central Library'),
+                const SizedBox(width: 8),
+                _buildQuickExploreChip('🌳 Vetal Hill', 'Vetal Tekdi Hill'),
+                const SizedBox(width: 8),
+                _buildQuickExploreChip('🌸 Kamala Nehru', 'Kamala Nehru Park'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickExploreChip(String label, String destination) {
+    return ActionChip(
+      avatar: const Icon(Icons.near_me_rounded, size: 13, color: QuietColors.primaryDark),
+      label: Text(
+        label,
+        style: GoogleFonts.inter(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: QuietColors.textCharcoal,
+        ),
+      ),
+      backgroundColor: const Color(0xFFEDF4ED),
+      side: const BorderSide(color: Color(0xFFCCE0CB)),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      onPressed: () => _selectAndNavigate(destination),
+    );
+  }
 
   void _showExplainabilitySheet(BuildContext context, RouteOptionData route) {
     showModalBottomSheet(

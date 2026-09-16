@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -39,7 +40,8 @@ class AppConfigService {
   bool _ttsVoiceEnabled = true;
   double _lastKnownLat = 18.510408;
   double _lastKnownLng = 73.937475;
-  String _currentDestination = 'Amanora Mall';
+  String _currentDestination = '';
+  String _serverBaseUrl = '';
 
   // Getters
   bool get hasCompletedOnboarding => _hasCompletedOnboarding;
@@ -52,6 +54,7 @@ class AppConfigService {
   double get lastKnownLat => _lastKnownLat;
   double get lastKnownLng => _lastKnownLng;
   String get currentDestination => _currentDestination;
+  String get serverBaseUrl => _serverBaseUrl;
 
   /// Resolves the app storage file location across platforms
   File _resolveConfigFile() {
@@ -143,7 +146,11 @@ class AppConfigService {
       _lastKnownLng = (json['last_known_lng'] as num?)?.toDouble() ?? 77.5946;
     }
     if (json.containsKey('current_destination')) {
-      _currentDestination = json['current_destination'] as String? ?? 'Bangalore Golf Club';
+      // Current destination is session-transient; on fresh cold launch it always starts empty
+      _currentDestination = '';
+    }
+    if (json.containsKey('server_base_url')) {
+      _serverBaseUrl = json['server_base_url'] as String? ?? '';
     }
   }
 
@@ -159,12 +166,29 @@ class AppConfigService {
       'last_known_lat': _lastKnownLat,
       'last_known_lng': _lastKnownLng,
       'current_destination': _currentDestination,
+      'server_base_url': _serverBaseUrl,
       'updated_at': DateTime.now().toIso8601String(),
     };
   }
 
+  /// Sets custom backend server base URL and persists immediately.
+  Future<void> setServerBaseUrl(String url) async {
+    _serverBaseUrl = url.trim();
+    await save();
+  }
+
+  Timer? _debounceSaveTimer;
+
+  void _scheduleDebouncedSave() {
+    _debounceSaveTimer?.cancel();
+    _debounceSaveTimer = Timer(const Duration(seconds: 15), () {
+      save();
+    });
+  }
+
   /// Asynchronously saves the current config to disk.
   Future<void> save() async {
+    _debounceSaveTimer?.cancel();
     try {
       final file = _resolveConfigFile();
       if (!file.parent.existsSync()) {
@@ -174,7 +198,6 @@ class AppConfigService {
       }
       final jsonString = jsonEncode(_toJson());
       await file.writeAsString(jsonString, flush: true);
-      debugPrint('[AppConfigService] Saved config to ${file.path}');
     } catch (e) {
       debugPrint('[AppConfigService] Failed to write config: $e');
     }
@@ -229,11 +252,12 @@ class AppConfigService {
   }
   Future<void> setTtsVoiceEnabled(bool value) => setTtsVoice(value);
 
-  /// Updates user location.
+  /// Updates user location in-memory immediately, debouncing disk writes
+  /// to eliminate flash I/O lag and stutter during active tracking.
   Future<void> updateLocation(double lat, double lng) async {
     _lastKnownLat = lat;
     _lastKnownLng = lng;
-    await save();
+    _scheduleDebouncedSave();
   }
   Future<void> updateLastLocation(double lat, double lng) => updateLocation(lat, lng);
 
@@ -254,7 +278,7 @@ class AppConfigService {
     _ttsVoiceEnabled = true;
     _lastKnownLat = 12.9716;
     _lastKnownLng = 77.5946;
-    _currentDestination = 'Bangalore Golf Club';
+    _currentDestination = '';
     await save();
   }
 }

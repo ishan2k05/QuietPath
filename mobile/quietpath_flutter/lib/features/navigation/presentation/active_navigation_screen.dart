@@ -6,8 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:quietpath_flutter/core/services/location_service.dart';
+import 'package:quietpath_flutter/core/services/noise_meter_service.dart';
 import 'package:quietpath_flutter/core/services/tile_cache_service.dart';
 import 'package:quietpath_flutter/core/theme/quietpath_theme.dart';
+import 'package:quietpath_flutter/core/widgets/quietpath_logo.dart';
 import 'package:quietpath_flutter/features/explore/data/routes_provider.dart';
 import 'package:quietpath_flutter/features/explore/presentation/widgets/sensory_map_canvas.dart';
 import 'package:quietpath_flutter/features/explore/presentation/widgets/sensory_tile_layer.dart';
@@ -359,9 +361,7 @@ class _ActiveNavigationScreenState extends ConsumerState<ActiveNavigationScreen>
     final step = _steps.isNotEmpty ? _steps[_currentStepIndex.clamp(0, _steps.length - 1)] : null;
     final isArrived = _currentStepIndex == _steps.length - 1;
     final userLocation = ref.watch(userLocationProvider);
-    final compassHeading = ref.watch(compassHeadingProvider);
     final isAutoWalkActive = ref.watch(userLocationProvider.notifier).isAutoWalkActive;
-    final effectiveBearing = _getEffectiveHeading(compassHeading, userLocation, step);
 
     // Real-time GPS proximity listener for turn auto-advancement & dynamic countdown & auto-reroute
     ref.listen<UserCoordinates>(userLocationProvider, (previous, current) {
@@ -440,41 +440,47 @@ class _ActiveNavigationScreenState extends ConsumerState<ActiveNavigationScreen>
                   return SizedBox(
                     width: constraints.maxWidth,
                     height: constraints.maxHeight,
-                    child: Transform.rotate(
-                      angle: _isHeadsUp ? -(effectiveBearing * math.pi / 180.0) : 0.0,
-                      alignment: Alignment.center,
-                      child: Stack(
-                        children: [
-                          Positioned.fill(
-                            child: SensoryTileLayer(
-                              width: constraints.maxWidth,
-                              height: constraints.maxHeight,
-                              centerLat: userLocation.latitude,
-                              centerLng: userLocation.longitude,
-                              zoom: 15.5,
-                              providerType: TileProviderType.googleRoads,
-                            ),
+                    child: Consumer(
+                      builder: (context, ref, _) {
+                        final compassHeading = ref.watch(compassHeadingProvider);
+                        final effectiveBearing = _getEffectiveHeading(compassHeading, userLocation, step);
+                        return Transform.rotate(
+                          angle: _isHeadsUp ? -(effectiveBearing * math.pi / 180.0) : 0.0,
+                          alignment: Alignment.center,
+                          child: Stack(
+                            children: [
+                              Positioned.fill(
+                                child: SensoryTileLayer(
+                                  width: constraints.maxWidth,
+                                  height: constraints.maxHeight,
+                                  centerLat: userLocation.latitude,
+                                  centerLng: userLocation.longitude,
+                                  zoom: 15.5,
+                                  providerType: TileProviderType.googleRoads,
+                                ),
+                              ),
+                              Positioned.fill(
+                                child: SensoryMapCanvas(
+                                  isCalmestSelected: !_isRerouted,
+                                  destinationName: dest,
+                                  userStepIndex: _currentStepIndex,
+                                  width: constraints.maxWidth,
+                                  height: constraints.maxHeight,
+                                  hasTileLayer: true,
+                                  isHardwareGps: userLocation.isHardwareGps,
+                                  userLat: userLocation.latitude,
+                                  userLng: userLocation.longitude,
+                                  accuracy: userLocation.accuracy,
+                                  heading: compassHeading,
+                                  cameraLat: userLocation.latitude,
+                                  cameraLng: userLocation.longitude,
+                                  zoom: 15.5,
+                                ),
+                              ),
+                            ],
                           ),
-                          Positioned.fill(
-                            child: SensoryMapCanvas(
-                              isCalmestSelected: !_isRerouted,
-                              destinationName: dest,
-                              userStepIndex: _currentStepIndex,
-                              width: constraints.maxWidth,
-                              height: constraints.maxHeight,
-                              hasTileLayer: true,
-                              isHardwareGps: userLocation.isHardwareGps,
-                              userLat: userLocation.latitude,
-                              userLng: userLocation.longitude,
-                              accuracy: userLocation.accuracy,
-                              heading: compassHeading,
-                              cameraLat: userLocation.latitude,
-                              cameraLng: userLocation.longitude,
-                              zoom: 15.5,
-                            ),
-                          ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
                   );
                 },
@@ -520,7 +526,7 @@ class _ActiveNavigationScreenState extends ConsumerState<ActiveNavigationScreen>
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.eco_rounded, color: QuietColors.primaryDark, size: 22),
+                            const QuietPathLogo(size: 22),
                             const SizedBox(width: 8),
                             Text(
                               'QuietPath Nav',
@@ -622,26 +628,47 @@ class _ActiveNavigationScreenState extends ConsumerState<ActiveNavigationScreen>
                                   ],
                                 ),
                               ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE5EFE0),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(Icons.volume_down_rounded, color: Color(0xFF385A27), size: 14),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '${step.decibels} dB',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w700,
-                                        color: const Color(0xFF385A27),
-                                      ),
+                              Builder(
+                                builder: (context) {
+                                  final liveDbAsync = ref.watch(liveDecibelProvider);
+                                  final displayDb = liveDbAsync.value != null
+                                      ? liveDbAsync.value!.round()
+                                      : step.decibels;
+                                  final isHigh = displayDb >= 68;
+                                  final isMod = displayDb >= 52 && displayDb < 68;
+                                  final dbColor = isHigh
+                                      ? const Color(0xFFC04B37)
+                                      : (isMod ? const Color(0xFFD97706) : const Color(0xFF385A27));
+                                  final dbBg = isHigh
+                                      ? const Color(0xFFFCEEEB)
+                                      : (isMod ? const Color(0xFFFFF8E1) : const Color(0xFFE5EFE0));
+                                  final dbIcon = isHigh
+                                      ? Icons.volume_up_rounded
+                                      : (isMod ? Icons.volume_down_rounded : Icons.volume_mute_rounded);
+
+                                  return Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: dbBg,
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: dbColor.withValues(alpha: 0.3)),
                                     ),
-                                  ],
-                                ),
+                                    child: Row(
+                                      children: [
+                                        Icon(dbIcon, color: dbColor, size: 14),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          '$displayDb dB',
+                                          style: GoogleFonts.inter(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: dbColor,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
                               ),
                             ],
                           ),
@@ -873,31 +900,37 @@ class _ActiveNavigationScreenState extends ConsumerState<ActiveNavigationScreen>
                       width: 1.5,
                     ),
                   ),
-                  child: Center(
-                    child: Transform.rotate(
-                      angle: -(effectiveBearing * math.pi / 180.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 3,
-                            height: 10,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFFC04B37),
-                              borderRadius: BorderRadius.vertical(top: Radius.circular(2)),
-                            ),
+                  child: Consumer(
+                    builder: (context, ref, _) {
+                      final compassHeading = ref.watch(compassHeadingProvider);
+                      final effectiveBearing = _getEffectiveHeading(compassHeading, userLocation, step);
+                      return Center(
+                        child: Transform.rotate(
+                          angle: -(effectiveBearing * math.pi / 180.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Container(
+                                width: 3,
+                                height: 10,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFFC04B37),
+                                  borderRadius: BorderRadius.vertical(top: Radius.circular(2)),
+                                ),
+                              ),
+                              Container(
+                                width: 3,
+                                height: 10,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF9E9E9E),
+                                  borderRadius: BorderRadius.vertical(bottom: Radius.circular(2)),
+                                ),
+                              ),
+                            ],
                           ),
-                          Container(
-                            width: 3,
-                            height: 10,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF9E9E9E),
-                              borderRadius: BorderRadius.vertical(bottom: Radius.circular(2)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),

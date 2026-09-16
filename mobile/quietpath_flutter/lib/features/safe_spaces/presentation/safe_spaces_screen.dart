@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:quietpath_flutter/core/theme/quietpath_theme.dart';
+import 'package:quietpath_flutter/core/widgets/quietpath_logo.dart';
 import 'package:quietpath_flutter/features/safe_spaces/data/safe_spaces_provider.dart';
 
 class SafeSpacesScreen extends ConsumerWidget {
@@ -36,7 +37,7 @@ class SafeSpacesScreen extends ConsumerWidget {
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.eco_rounded, color: QuietColors.primaryDark, size: 22),
+                      const QuietPathLogo(size: 22),
                       const SizedBox(width: 8),
                       Text(
                         'QuietPath',

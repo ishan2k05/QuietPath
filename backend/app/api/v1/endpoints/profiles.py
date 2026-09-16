@@ -1,5 +1,5 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.models.sensory_profile import SensoryProfileModel
@@ -46,7 +46,10 @@ def save_sensory_profile(profile_in: SensoryProfileCreate, db: Session = Depends
 
 
 @router.get("/me", response_model=SensoryProfileResponse, tags=["Sensory Profiles"])
-def get_my_sensory_profile(user_id: str = "demo_user", db: Session = Depends(get_db)):
+def get_my_sensory_profile(
+    user_id: str = Query("demo_user", min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_\-]+$"),
+    db: Session = Depends(get_db),
+):
     existing = db.query(SensoryProfileModel).filter(SensoryProfileModel.user_id == user_id).first()
     if existing:
         return SensoryProfileResponse(

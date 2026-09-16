@@ -30,7 +30,7 @@ class GoogleSensoryMapView extends StatefulWidget {
     this.compassHeading,
     this.isHardwareGps = false,
     this.isCalmestSelected = true,
-    this.destinationName = 'Bangalore Golf Club',
+    this.destinationName = '',
     this.hazards = const [],
     this.onErrorFallback,
   });
@@ -97,6 +97,9 @@ class _GoogleSensoryMapViewState extends State<GoogleSensoryMapView> {
   }
 
   Set<Polyline> _buildPolylines() {
+    if (widget.destinationName.trim().isEmpty) {
+      return {};
+    }
     return {
       // 1. Quickest Route Polyline (Commercial Arterial)
       Polyline(
@@ -129,18 +132,20 @@ class _GoogleSensoryMapViewState extends State<GoogleSensoryMapView> {
   Set<Marker> _buildMarkers() {
     final markers = <Marker>{};
 
-    // 1. Destination Marker
-    markers.add(
-      Marker(
-        markerId: const MarkerId('destination'),
-        position: _bangaloreGolfClub,
-        infoWindow: InfoWindow(
-          title: widget.destinationName,
-          snippet: 'Safe Sanctuary Destination',
+    // 1. Destination Marker (only rendered when an active destination is selected)
+    if (widget.destinationName.trim().isNotEmpty) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId('destination'),
+          position: _bangaloreGolfClub,
+          infoWindow: InfoWindow(
+            title: widget.destinationName,
+            snippet: 'Safe Sanctuary Destination',
+          ),
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
         ),
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-      ),
-    );
+      );
+    }
 
     // 2. Start / Sanctuary Marker (Cubbon Park)
     markers.add(

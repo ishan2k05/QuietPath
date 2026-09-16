@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:dio/dio.dart';
 import 'package:quietpath_flutter/core/network/api_client.dart';
 import 'package:quietpath_flutter/core/theme/quietpath_theme.dart';
 
@@ -228,7 +229,22 @@ class HazardsNotifier extends StateNotifier<HazardsState> {
       );
       return true;
     } catch (e) {
-      // Local optimistic addition on client fallback
+      if (e is DioException && e.response?.statusCode == 422) {
+        state = state.copyWith(
+          isSubmitting: false,
+          errorMessage: 'Validation failed: Please ensure all hazard details are valid.',
+        );
+        return false;
+      }
+      if (e is DioException && e.response?.statusCode == 429) {
+        state = state.copyWith(
+          isSubmitting: false,
+          errorMessage: 'Pacing alert: Rate limit reached. Please pause before submitting again.',
+        );
+        return false;
+      }
+
+      // Local optimistic addition on client offline fallback
       final optimisticHazard = HazardData(
         id: 'hz_local_${DateTime.now().millisecondsSinceEpoch}',
         hazardType: hazardType.toLowerCase(),
@@ -250,33 +266,39 @@ class HazardsNotifier extends StateNotifier<HazardsState> {
     }
   }
 
-  Future<void> upvoteHazard(String id) async {
+  Future<bool> upvoteHazard(String id) async {
     try {
       final dio = ApiClient().dio;
       await dio.post('/hazards/$id/upvote');
-    } catch (_) {
-      // Optimistic update proceeds even if network error
-    }
 
-    final updated = state.hazards.map((h) {
-      if (h.id == id) {
-        return HazardData(
-          id: h.id,
-          hazardType: h.hazardType,
-          title: h.title,
-          description: h.description,
-          severity: h.severity,
-          lat: h.lat,
-          lng: h.lng,
-          reportedAt: h.reportedAt,
-          expiresAt: h.expiresAt.add(const Duration(minutes: 30)),
-          upvotes: h.upvotes + 1,
+      final updated = state.hazards.map((h) {
+        if (h.id == id) {
+          return HazardData(
+            id: h.id,
+            hazardType: h.hazardType,
+            title: h.title,
+            description: h.description,
+            severity: h.severity,
+            lat: h.lat,
+            lng: h.lng,
+            reportedAt: h.reportedAt,
+            expiresAt: h.expiresAt.add(const Duration(minutes: 30)),
+            upvotes: h.upvotes + 1,
+          );
+        }
+        return h;
+      }).toList();
+
+      state = state.copyWith(hazards: updated, successMessage: 'Sensory hazard confirmed.');
+      return true;
+    } catch (e) {
+      if (e is DioException && e.response?.statusCode == 429) {
+        state = state.copyWith(
+          errorMessage: 'You have already confirmed this sensory hazard recently.',
         );
       }
-      return h;
-    }).toList();
-
-    state = state.copyWith(hazards: updated);
+      return false;
+    }
   }
 }
 

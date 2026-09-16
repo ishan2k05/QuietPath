@@ -2,8 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:dio/dio.dart';
+import 'package:quietpath_flutter/core/network/api_client.dart';
 import 'package:quietpath_flutter/core/services/app_config_service.dart';
+import 'package:quietpath_flutter/core/services/tile_cache_service.dart';
 import 'package:quietpath_flutter/core/theme/quietpath_theme.dart';
+import 'package:quietpath_flutter/core/widgets/quietpath_logo.dart';
 import 'package:quietpath_flutter/features/profile/data/profile_provider.dart';
 
 class SensoryProfileSetupScreen extends ConsumerStatefulWidget {
@@ -26,6 +30,16 @@ class _SensoryProfileSetupScreenState
   int _trafficIndex = 1;
   int _timeToleranceIndex = 1;
 
+  TileCacheInfo? _tileCacheInfo;
+  bool _isDownloadingTiles = false;
+  double _downloadProgress = 0.0;
+  int _downloadedCount = 0;
+  int _downloadTotal = 0;
+
+  String? _serverPingStatus;
+  bool _isTestingServer = false;
+  bool _serverIsOnline = false;
+
   @override
   void initState() {
     super.initState();
@@ -35,6 +49,111 @@ class _SensoryProfileSetupScreenState
     _lightIndex = p.lightIntensity >= 0.7 ? 0 : (p.lightIntensity >= 0.4 ? 1 : 2);
     _trafficIndex = p.trafficSensitivity >= 0.7 ? 0 : (p.trafficSensitivity >= 0.4 ? 1 : 2);
     _timeToleranceIndex = p.timePenaltyTolerance >= 0.7 ? 0 : (p.timePenaltyTolerance >= 0.35 ? 1 : 2);
+    _loadTileCacheInfo();
+    _testServerConnection(quiet: true);
+  }
+
+  Future<void> _testServerConnection({bool quiet = false}) async {
+    if (_isTestingServer) return;
+    setState(() {
+      _isTestingServer = true;
+      if (!quiet) _serverPingStatus = 'Testing backend...';
+    });
+
+    try {
+      final sw = Stopwatch()..start();
+      final dio = ApiClient().dio;
+      final res = await dio.get(
+        '/health',
+        options: Options(
+          sendTimeout: const Duration(seconds: 3),
+          receiveTimeout: const Duration(seconds: 3),
+        ),
+      );
+      sw.stop();
+      if (mounted) {
+        if (res.statusCode == 200) {
+          setState(() {
+            _serverIsOnline = true;
+            _serverPingStatus = 'Online (${sw.elapsedMilliseconds}ms)';
+          });
+        } else {
+          setState(() {
+            _serverIsOnline = false;
+            _serverPingStatus = 'Server error (${res.statusCode})';
+          });
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _serverIsOnline = false;
+          _serverPingStatus = 'Offline mode active (app fully functional)';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTestingServer = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadTileCacheInfo() async {
+    final info = await TileCacheService().getCachedTilesInfo();
+    if (mounted) {
+      setState(() {
+        _tileCacheInfo = info;
+      });
+    }
+  }
+
+  Future<void> _startDownloadTilePack() async {
+    if (_isDownloadingTiles) return;
+    setState(() {
+      _isDownloadingTiles = true;
+      _downloadProgress = 0.0;
+      _downloadedCount = 0;
+      _downloadTotal = 0;
+    });
+
+    try {
+      await TileCacheService().downloadCityTilePack(
+        centerLat: 18.510408,
+        centerLng: 73.937475,
+        cityName: 'Pune Hadapsar',
+        zoomLevels: const [13, 14, 15],
+        radiusKm: 3.5,
+        onProgress: (completed, total, pct) {
+          if (mounted) {
+            setState(() {
+              _downloadedCount = completed;
+              _downloadTotal = total;
+              _downloadProgress = pct;
+            });
+          }
+        },
+      );
+      await _loadTileCacheInfo();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: QuietColors.primaryDark,
+            content: Text(
+              'Pune Hadapsar offline pack ready! You can now navigate offline without internet.',
+              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+            ),
+          ),
+        );
+      }
+    } catch (_) {}
+
+    if (mounted) {
+      setState(() {
+        _isDownloadingTiles = false;
+      });
+    }
   }
 
   @override
@@ -48,19 +167,16 @@ class _SensoryProfileSetupScreenState
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               const SizedBox(height: 12),
-              // Leaf logo
+              // App logo
               Container(
-                width: 48,
-                height: 48,
+                width: 52,
+                height: 52,
                 decoration: const BoxDecoration(
                   color: QuietColors.primaryLight,
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(
-                  Icons.eco_rounded,
-                  color: QuietColors.primaryDark,
-                  size: 28,
-                ),
+                alignment: Alignment.center,
+                child: const QuietPathLogo(size: 32),
               ),
               const SizedBox(height: 16),
               Text(
@@ -198,7 +314,15 @@ class _SensoryProfileSetupScreenState
                 },
               ),
 
-              const SizedBox(height: 36),
+              const SizedBox(height: 28),
+
+              // Offline Navigation & Maps Pack (visible in settings mode)
+              if (!widget.isStandaloneOnboarding) ...[
+                _buildOfflineMapsCard(),
+                const SizedBox(height: 16),
+                _buildServerConnectionCard(),
+                const SizedBox(height: 24),
+              ],
 
               // Primary CTA Button
               SizedBox(
@@ -248,6 +372,356 @@ class _SensoryProfileSetupScreenState
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildOfflineMapsCard() {
+    final info = _tileCacheInfo;
+    final isReady = info?.isPunePackInstalled ?? false;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF6F8F6),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E9E2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE8F5E9),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.offline_pin_rounded, color: QuietColors.primaryDark, size: 20),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Offline Maps & Navigation',
+                      style: GoogleFonts.inter(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: QuietColors.textCharcoal,
+                      ),
+                    ),
+                    Text(
+                      '${info?.tileCount ?? 0} tiles cached • ${info?.sizeInMb ?? 0.0} MB',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: QuietColors.textMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (isReady)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE8F5E9),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'Offline Ready',
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: QuietColors.primaryDark,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Download offline cartography for Pune Hadapsar (Amanora, Magarpatta, Mundhwa) for zero-latency, calm navigation when out of network coverage.',
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              color: QuietColors.textMuted,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          if (_isDownloadingTiles) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: _downloadProgress > 0 ? _downloadProgress : null,
+                minHeight: 8,
+                backgroundColor: const Color(0xFFDFE6DF),
+                valueColor: const AlwaysStoppedAnimation<Color>(QuietColors.primaryDark),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Downloading tiles ($_downloadedCount/$_downloadTotal)...',
+                  style: GoogleFonts.inter(fontSize: 11, color: QuietColors.primaryDark, fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  '${(_downloadProgress * 100).toInt()}%',
+                  style: GoogleFonts.inter(fontSize: 11, color: QuietColors.primaryDark, fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+          ] else ...[
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _startDownloadTilePack,
+                    icon: Icon(isReady ? Icons.refresh_rounded : Icons.download_rounded, size: 18),
+                    label: Text(
+                      isReady ? 'Update Pune Pack (~8 MB)' : 'Download Pune Pack (~8 MB)',
+                      style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: QuietColors.primaryDark,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+                if ((info?.tileCount ?? 0) > 0) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFC62828), size: 20),
+                    tooltip: 'Clear tile cache',
+                    onPressed: () async {
+                      await TileCacheService().clearTileCache();
+                      await _loadTileCacheInfo();
+                    },
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _showEditServerDialog() {
+    final currentUrl = ApiClient().baseUrl;
+    final controller = TextEditingController(text: currentUrl);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.dns_rounded, color: QuietColors.primaryDark, size: 22),
+            const SizedBox(width: 8),
+            Text(
+              'Backend Server URL',
+              style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Configure the FastAPI server endpoint for real devices on your local Wi-Fi or USB tether:',
+              style: GoogleFonts.inter(fontSize: 12, color: QuietColors.textMuted),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                labelText: 'Server Base URL',
+                hintText: 'http://192.168.1.x:8000',
+                filled: true,
+                fillColor: const Color(0xFFF4F6F4),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+              style: GoogleFonts.inter(fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Quick Presets:',
+              style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w600, color: QuietColors.textCharcoal),
+            ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                ActionChip(
+                  label: const Text('Emulator (10.0.2.2)'),
+                  onPressed: () => controller.text = 'http://10.0.2.2:8000',
+                ),
+                ActionChip(
+                  label: const Text('USB / Local (127.0.0.1)'),
+                  onPressed: () => controller.text = 'http://127.0.0.1:8000',
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Cancel', style: GoogleFonts.inter(color: QuietColors.textMuted)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: QuietColors.primaryDark,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            onPressed: () async {
+              final newUrl = controller.text.trim();
+              if (newUrl.isNotEmpty) {
+                ApiClient().updateBaseUrl(newUrl);
+                await AppConfigService().setServerBaseUrl(newUrl);
+                if (ctx.mounted) {
+                  Navigator.pop(ctx);
+                }
+                if (mounted) {
+                  _testServerConnection();
+                }
+              }
+            },
+            child: Text('Save & Reconnect', style: GoogleFonts.inter(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildServerConnectionCard() {
+    final currentUrl = ApiClient().baseUrl;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE5E7EB)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: _serverIsOnline ? const Color(0xFFE8F5E9) : const Color(0xFFFFF3E0),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  _serverIsOnline ? Icons.cloud_done_rounded : Icons.cloud_off_rounded,
+                  color: _serverIsOnline ? const Color(0xFF2E7D32) : const Color(0xFFEF6C00),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Backend Server Connection',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: QuietColors.textCharcoal,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _serverPingStatus ?? 'Checking connection...',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: _serverIsOnline ? const Color(0xFF2E7D32) : const Color(0xFFD97706),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_isTestingServer)
+                const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: QuietColors.primaryDark),
+                )
+              else
+                IconButton(
+                  icon: const Icon(Icons.refresh_rounded, size: 20, color: QuietColors.textMuted),
+                  tooltip: 'Test Connection',
+                  onPressed: () => _testServerConnection(),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          InkWell(
+            onTap: _showEditServerDialog,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF9FAFB),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE5E7EB)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.link_rounded, size: 16, color: QuietColors.primaryDark),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      currentUrl,
+                      style: GoogleFonts.inter(fontSize: 12, color: QuietColors.textCharcoal, fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: QuietColors.primaryDark.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      'Edit IP',
+                      style: GoogleFonts.inter(fontSize: 11, color: QuietColors.primaryDark, fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Physical phone testing: Set to your computer\'s Wi-Fi IP (e.g. http://192.168.1.x:8000). QuietPath will also run 100% offline with on-device fallbacks.',
+            style: GoogleFonts.inter(fontSize: 10, color: QuietColors.textMuted, height: 1.3),
+          ),
+        ],
       ),
     );
   }

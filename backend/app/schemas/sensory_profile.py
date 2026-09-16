@@ -13,7 +13,13 @@ class SensoryProfileBase(BaseModel):
 
 
 class SensoryProfileCreate(SensoryProfileBase):
-    user_id: Optional[str] = "demo_user"
+    user_id: Optional[str] = Field(
+        "demo_user",
+        min_length=1,
+        max_length=64,
+        pattern=r"^[a-zA-Z0-9_\-]+$",
+        description="Alphanumeric identifier with underscores or hyphens",
+    )
 
 
 class SensoryProfileResponse(SensoryProfileBase):
